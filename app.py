@@ -9,25 +9,34 @@ HARTREE_TO_KCAL = 627.509474
 R_KCAL = 0.0019872041  # kcal mol^-1 K^-1
 
 st.title("Gaussian NMR Boltzmann Averaging App")
-st.caption("Ver. 1.1")
+st.caption("Ver. 1.2")
 st.write(
     "Upload Gaussian opt+freq logs and GIAO logs, match conformers by filename, "
     "extract SCF or Gibbs free energies, calculate Boltzmann-averaged isotropic shieldings, "
-    "and optionally average equivalent atoms."
+    "and convert them to chemical shifts using manual references, a TMS log, or linear scaling."
 )
 
-# =========================
-# helper functions
-# =========================
+# =========================================================
+# Helper functions
+# =========================================================
 def extract_conf_id(filename: str):
     """
-    Extract trailing integer before .log / .out
-    Examples:
-      conf01_optfreq.log -> None with this simple rule
-      ..._3.log -> 3
+    Extract a conformer ID from filename.
+    Priority:
+      1) trailing integer before .log/.out
+      2) confXX pattern
+      3) fallback to filename stem
     """
     m = re.search(r"(\d+)\.(log|out)$", filename, re.IGNORECASE)
-    return m.group(1) if m else None
+    if m:
+        return m.group(1)
+
+    m2 = re.search(r"conf[_\- ]*(\d+)", filename, re.IGNORECASE)
+    if m2:
+        return m2.group(1)
+
+    stem = re.sub(r"\.(log|out)$", "", filename, flags=re.IGNORECASE)
+    return stem
 
 
 def read_text(uploaded_file):
@@ -44,7 +53,7 @@ def extract_gibbs_free_energy(text: str):
         if key in line:
             try:
                 return float(line.split("=")[-1].strip())
-            except:
+            except Exception:
                 pass
 
     key2 = "Sum of electronic and thermal Free Energies"
@@ -52,8 +61,9 @@ def extract_gibbs_free_energy(text: str):
         if key2 in line:
             try:
                 return float(line.split()[-1])
-            except:
+            except Exception:
                 pass
+
     return None
 
 
@@ -63,12 +73,12 @@ def extract_last_scf_energy(text: str):
     Example:
       SCF Done:  E(RB3LYP) =  -1234.56789012     A.U. after ...
     """
-    pattern = re.compile(r"SCF Done:\s+E\([RU]?[A-Z0-9]+\)\s+=\s+(-?\d+\.\d+)")
+    pattern = re.compile(r"SCF Done:\s+E\([RU]?[A-Za-z0-9]+\)\s*=\s*(-?\d+\.\d+)")
     matches = pattern.findall(text)
     if matches:
         try:
             return float(matches[-1])
-        except:
+        except Exception:
             return None
     return None
 
@@ -85,12 +95,35 @@ def extract_isotropic_shieldings(text: str):
     )
     rows = []
     for m in pattern.finditer(text):
-        rows.append({
-            "atom_index": int(m.group(1)),
-            "element": m.group(2),
-            "shielding": float(m.group(3))
-        })
+        rows.append(
+            {
+                "atom_index": int(m.group(1)),
+                "element": m.group(2),
+                "shielding": float(m.group(3)),
+            }
+        )
     return pd.DataFrame(rows)
+
+
+def get_tms_reference_from_log(text):
+    df = extract_isotropic_shieldings(text)
+
+    if df.empty:
+        return None, None, "No isotropic shielding entries were found in the TMS log."
+
+    h_df = df[df["element"] == "H"].copy()
+    c_df = df[df["element"] == "C"].copy()
+
+    if h_df.empty:
+        return None, None, "No hydrogen shielding values were found in the TMS log."
+
+    if c_df.empty:
+        return None, None, "No carbon shielding values were found in the TMS log."
+
+    ref_H = h_df["shielding"].mean()
+    ref_C = c_df["shielding"].mean()
+
+    return ref_H, ref_C, None
 
 
 def boltzmann_weights(energies_hartree, temperature=298.15):
@@ -110,36 +143,37 @@ def build_per_conformer_shielding_table(shielding_map, conf_ids):
     for cid in conf_ids:
         df = shielding_map[cid].copy()
         df = df.rename(columns={"shielding": f"shielding_{cid}"})
+
         if merged is None:
             merged = df
         else:
             merged = pd.merge(merged, df, on=["atom_index", "element"], how="outer")
+
     return merged
 
 
 def add_boltzmann_average(per_conf_df, conf_ids, weights):
     out = per_conf_df.copy()
-    weighted_sum = np.zeros(len(out), dtype=float)
 
     for cid, w in zip(conf_ids, weights):
         col = f"shielding_{cid}"
         weighted_col = f"weighted_{cid}"
         out[weighted_col] = out[col] * w
-        weighted_sum += out[col].astype(float).values * w
 
-    out["shielding_boltzmann"] = weighted_sum
+    weighted_cols = [f"weighted_{cid}" for cid in conf_ids]
+    out["shielding_boltzmann"] = out[weighted_cols].sum(axis=1)
     return out
 
 
 def shielding_to_shift(
     df,
-    mode="reference",
+    mode="manual_reference",
     ref_H=31.5,
     ref_C=185.0,
     slope_H=1.0,
     intercept_H=31.5,
     slope_C=1.0,
-    intercept_C=185.0
+    intercept_C=185.0,
 ):
     out = df.copy()
     shifts = []
@@ -148,20 +182,22 @@ def shielding_to_shift(
         s = row["shielding_boltzmann"]
         el = row["element"]
 
-        if mode == "reference":
+        if mode in ["manual_reference", "tms_log"]:
             if el == "H":
                 delta = ref_H - s
             elif el == "C":
                 delta = ref_C - s
             else:
                 delta = np.nan
-        else:
+        elif mode == "linear":
             if el == "H":
                 delta = intercept_H - slope_H * s
             elif el == "C":
                 delta = intercept_C - slope_C * s
             else:
                 delta = np.nan
+        else:
+            delta = np.nan
 
         shifts.append(delta)
 
@@ -175,12 +211,6 @@ def parse_equivalent_groups(text):
       H_a: 1,2,3
       OMe: 45,46,47
       C_ring: 10,12
-
-    Returns:
-      [
-        {"label": "H_a", "atoms": [1,2,3]},
-        {"label": "OMe", "atoms": [45,46,47]},
-      ]
     """
     groups = []
     lines = [x.strip() for x in text.splitlines() if x.strip()]
@@ -200,7 +230,7 @@ def parse_equivalent_groups(text):
             if token:
                 try:
                     atoms.append(int(token))
-                except:
+                except Exception:
                     pass
 
         atoms = sorted(set(atoms))
@@ -210,7 +240,7 @@ def parse_equivalent_groups(text):
     return groups
 
 
-def average_equivalent_atoms(df, groups, conf_ids):
+def average_equivalent_atoms(df, groups):
     """
     For each user-defined equivalent atom group, average:
       - each conformer's shielding
@@ -220,8 +250,17 @@ def average_equivalent_atoms(df, groups, conf_ids):
     """
     results = []
 
-    numeric_cols = [c for c in df.columns if c.startswith("shielding_") or c.startswith("weighted_")]
-    has_shift = "chemical_shift" in df.columns
+    value_cols = [
+        c
+        for c in df.columns
+        if c.startswith("shielding_") or c.startswith("weighted_")
+    ]
+    if "shielding_boltzmann" in df.columns:
+        value_cols.append("shielding_boltzmann")
+    if "chemical_shift" in df.columns:
+        value_cols.append("chemical_shift")
+
+    value_cols = list(dict.fromkeys(value_cols))
 
     for group in groups:
         atoms = group["atoms"]
@@ -237,33 +276,27 @@ def average_equivalent_atoms(df, groups, conf_ids):
             "group_label": group["label"],
             "atom_indices": ",".join(map(str, atoms)),
             "n_atoms": len(atoms),
-            "element": element_label
+            "element": element_label,
         }
 
-        for col in numeric_cols:
+        for col in value_cols:
             row[col] = sub[col].mean()
-
-        if "shielding_boltzmann" in sub.columns:
-            row["shielding_boltzmann"] = sub["shielding_boltzmann"].mean()
-
-        if has_shift:
-            row["chemical_shift"] = sub["chemical_shift"].mean()
 
         results.append(row)
 
     if results:
         return pd.DataFrame(results)
-    else:
-        return pd.DataFrame(columns=["group_label", "atom_indices", "n_atoms", "element"])
+
+    return pd.DataFrame(columns=["group_label", "atom_indices", "n_atoms", "element"])
 
 
 def dataframe_to_csv_bytes(df):
     return df.to_csv(index=False).encode("utf-8")
 
 
-# =========================
-# sidebar
-# =========================
+# =========================================================
+# Sidebar settings
+# =========================================================
 st.sidebar.header("Settings")
 
 temperature = st.sidebar.number_input("Temperature (K)", value=298.15, step=1.0)
@@ -271,19 +304,48 @@ temperature = st.sidebar.number_input("Temperature (K)", value=298.15, step=1.0)
 energy_mode = st.sidebar.radio(
     "Energy to use for Boltzmann weighting",
     ["Gibbs free energy", "SCF energy"],
-    index=0
+    index=0,
 )
 
 shift_mode = st.sidebar.radio(
-    "Chemical shift conversion",
-    ["reference", "linear"],
-    index=0
+    "Chemical shift conversion method",
+    ["Manual reference shielding", "TMS log file", "Linear scaling"],
+    index=0,
 )
 
-if shift_mode == "reference":
+ref_H = None
+ref_C = None
+slope_H = None
+intercept_H = None
+slope_C = None
+intercept_C = None
+
+if shift_mode == "Manual reference shielding":
     ref_H = st.sidebar.number_input("Reference shielding for 1H", value=31.5)
     ref_C = st.sidebar.number_input("Reference shielding for 13C", value=185.0)
-else:
+
+elif shift_mode == "TMS log file":
+    tms_file = st.sidebar.file_uploader(
+        "Upload TMS GIAO log file",
+        type=["log", "out"],
+        accept_multiple_files=False,
+        key="tms_log",
+    )
+
+    if tms_file is not None:
+        tms_text = read_text(tms_file)
+        ref_H, ref_C, tms_error = get_tms_reference_from_log(tms_text)
+
+        if tms_error:
+            st.sidebar.error(tms_error)
+        else:
+            st.sidebar.success("TMS reference extracted successfully.")
+            st.sidebar.write(f"TMS 1H reference shielding: {ref_H:.4f}")
+            st.sidebar.write(f"TMS 13C reference shielding: {ref_C:.4f}")
+    else:
+        st.sidebar.info("Please upload a TMS GIAO log file.")
+
+elif shift_mode == "Linear scaling":
     slope_H = st.sidebar.number_input("Slope for 1H", value=1.0)
     intercept_H = st.sidebar.number_input("Intercept for 1H", value=31.5)
     slope_C = st.sidebar.number_input("Slope for 13C", value=1.0)
@@ -292,49 +354,57 @@ else:
 element_filter = st.sidebar.selectbox(
     "Element filter for display",
     ["All", "H", "C", "Other"],
-    index=0
+    index=0,
 )
 
-# =========================
-# equivalent atoms input
-# =========================
+# =========================================================
+# Equivalent atom groups
+# =========================================================
 st.subheader("1. Optional equivalent atom groups")
 eq_text = st.text_area(
     "Define equivalent atom groups (one group per line)",
     value="",
     height=140,
-    placeholder="Examples:\nH_a: 1,2,3\nOMe: 45,46,47\nC_eq: 10,12"
+    placeholder="Examples:\nH_a: 1,2,3\nOMe: 45,46,47\nC_eq: 10,12",
 )
 
 equivalent_groups = parse_equivalent_groups(eq_text)
 
 if equivalent_groups:
+    parsed_rows = []
+    for g in equivalent_groups:
+        parsed_rows.append(
+            {
+                "label": g["label"],
+                "atoms": ", ".join(map(str, g["atoms"])),
+            }
+        )
     st.write("Parsed equivalent groups:")
-    st.dataframe(pd.DataFrame(equivalent_groups), use_container_width=True)
+    st.dataframe(pd.DataFrame(parsed_rows), use_container_width=True)
 
-# =========================
-# file upload
-# =========================
+# =========================================================
+# File upload
+# =========================================================
 st.subheader("2. Upload files")
 
 opt_files = st.file_uploader(
     "Upload opt+freq log files",
     type=["log", "out"],
     accept_multiple_files=True,
-    key="opt"
+    key="opt_files",
 )
 
 giao_files = st.file_uploader(
     "Upload GIAO log files",
     type=["log", "out"],
     accept_multiple_files=True,
-    key="giao"
+    key="giao_files",
 )
 
 if opt_files and giao_files:
-    # -------------------------
-    # parse optfreq files
-    # -------------------------
+    # -----------------------------------------------------
+    # Parse opt+freq logs
+    # -----------------------------------------------------
     opt_records = []
     for f in opt_files:
         text = read_text(f)
@@ -343,19 +413,21 @@ if opt_files and giao_files:
         scf = extract_last_scf_energy(text)
         normal = check_normal_termination(text)
 
-        opt_records.append({
-            "conf_id": cid,
-            "opt_filename": f.name,
-            "gibbs_hartree": gibbs,
-            "scf_hartree": scf,
-            "opt_normal_termination": normal
-        })
+        opt_records.append(
+            {
+                "conf_id": cid,
+                "opt_filename": f.name,
+                "gibbs_hartree": gibbs,
+                "scf_hartree": scf,
+                "opt_normal_termination": normal,
+            }
+        )
 
     opt_df = pd.DataFrame(opt_records)
 
-    # -------------------------
-    # parse GIAO files
-    # -------------------------
+    # -----------------------------------------------------
+    # Parse GIAO logs
+    # -----------------------------------------------------
     giao_records = []
     shielding_map = {}
 
@@ -365,137 +437,147 @@ if opt_files and giao_files:
         normal = check_normal_termination(text)
         shielding_df = extract_isotropic_shieldings(text)
 
-        giao_records.append({
-            "conf_id": cid,
-            "giao_filename": f.name,
-            "n_atoms_found": len(shielding_df),
-            "giao_normal_termination": normal
-        })
+        giao_records.append(
+            {
+                "conf_id": cid,
+                "giao_filename": f.name,
+                "n_atoms_found": len(shielding_df),
+                "giao_normal_termination": normal,
+            }
+        )
 
         shielding_map[cid] = shielding_df
 
     giao_df = pd.DataFrame(giao_records)
 
-    # -------------------------
-    # match files
-    # -------------------------
+    # -----------------------------------------------------
+    # Match opt+freq and GIAO logs
+    # -----------------------------------------------------
     pair_df = pd.merge(opt_df, giao_df, on="conf_id", how="inner")
 
     st.subheader("3. Matched conformers")
     st.dataframe(pair_df, use_container_width=True)
 
-    # -------------------------
-    # choose energy column
-    # -------------------------
     if energy_mode == "Gibbs free energy":
         energy_col = "gibbs_hartree"
     else:
         energy_col = "scf_hartree"
 
     valid_df = pair_df[
-        pair_df["conf_id"].notna() &
-        pair_df[energy_col].notna() &
-        pair_df["opt_normal_termination"] &
-        pair_df["giao_normal_termination"] &
-        (pair_df["n_atoms_found"] > 0)
+        pair_df["conf_id"].notna()
+        & pair_df[energy_col].notna()
+        & pair_df["opt_normal_termination"]
+        & pair_df["giao_normal_termination"]
+        & (pair_df["n_atoms_found"] > 0)
     ].copy()
 
     if len(valid_df) == 0:
         st.error("No valid matched conformers were found.")
+        st.stop()
+
+    if shift_mode == "TMS log file" and (ref_H is None or ref_C is None):
+        st.error("Please upload a valid TMS GIAO log file before calculating chemical shifts.")
+        st.stop()
+
+    # -----------------------------------------------------
+    # Boltzmann weights
+    # -----------------------------------------------------
+    rel_kcal, weights = boltzmann_weights(valid_df[energy_col].values, temperature=temperature)
+    valid_df["energy_used_hartree"] = valid_df[energy_col]
+    valid_df["relative_energy_kcal"] = rel_kcal
+    valid_df["boltzmann_weight"] = weights
+
+    st.subheader("4. Energies and Boltzmann weights")
+    st.dataframe(valid_df, use_container_width=True)
+
+    # -----------------------------------------------------
+    # Per-conformer shielding table
+    # -----------------------------------------------------
+    conf_ids = valid_df["conf_id"].tolist()
+    per_conf_df = build_per_conformer_shielding_table(shielding_map, conf_ids)
+
+    if element_filter == "H":
+        per_conf_df = per_conf_df[per_conf_df["element"] == "H"].copy()
+    elif element_filter == "C":
+        per_conf_df = per_conf_df[per_conf_df["element"] == "C"].copy()
+    elif element_filter == "Other":
+        per_conf_df = per_conf_df[~per_conf_df["element"].isin(["H", "C"])].copy()
+
+    st.subheader("5. Isotropic shielding table for each conformer")
+    st.dataframe(per_conf_df, use_container_width=True)
+
+    # -----------------------------------------------------
+    # Boltzmann averaged table
+    # -----------------------------------------------------
+    avg_df = add_boltzmann_average(per_conf_df, conf_ids, weights)
+
+    if shift_mode == "Manual reference shielding":
+        result_df = shielding_to_shift(
+            avg_df,
+            mode="manual_reference",
+            ref_H=ref_H,
+            ref_C=ref_C,
+        )
+    elif shift_mode == "TMS log file":
+        result_df = shielding_to_shift(
+            avg_df,
+            mode="tms_log",
+            ref_H=ref_H,
+            ref_C=ref_C,
+        )
     else:
-        # -------------------------
-        # Boltzmann weights
-        # -------------------------
-        rel_kcal, weights = boltzmann_weights(valid_df[energy_col].values, temperature=temperature)
-        valid_df["energy_used_hartree"] = valid_df[energy_col]
-        valid_df["relative_energy_kcal"] = rel_kcal
-        valid_df["boltzmann_weight"] = weights
-
-        st.subheader("4. Energies and Boltzmann weights")
-        st.dataframe(valid_df, use_container_width=True)
-
-        # -------------------------
-        # per-conformer shielding table
-        # -------------------------
-        conf_ids = valid_df["conf_id"].tolist()
-        per_conf_df = build_per_conformer_shielding_table(shielding_map, conf_ids)
-
-        # Filter by element
-        if element_filter == "H":
-            per_conf_df = per_conf_df[per_conf_df["element"] == "H"].copy()
-        elif element_filter == "C":
-            per_conf_df = per_conf_df[per_conf_df["element"] == "C"].copy()
-        elif element_filter == "Other":
-            per_conf_df = per_conf_df[~per_conf_df["element"].isin(["H", "C"])].copy()
-
-        st.subheader("5. Isotropic shielding table for each conformer")
-        st.dataframe(per_conf_df, use_container_width=True)
-
-        # -------------------------
-        # Boltzmann averaged table
-        # -------------------------
-        avg_df = add_boltzmann_average(per_conf_df, conf_ids, weights)
-
-        if shift_mode == "reference":
-            result_df = shielding_to_shift(
-                avg_df,
-                mode="reference",
-                ref_H=ref_H,
-                ref_C=ref_C
-            )
-        else:
-            result_df = shielding_to_shift(
-                avg_df,
-                mode="linear",
-                slope_H=slope_H,
-                intercept_H=intercept_H,
-                slope_C=slope_C,
-                intercept_C=intercept_C
-            )
-
-        st.subheader("6. Per-atom Boltzmann-averaged shielding / shift table")
-        st.dataframe(result_df, use_container_width=True)
-
-        # -------------------------
-        # Equivalent atom averages
-        # -------------------------
-        if equivalent_groups:
-            eq_df = average_equivalent_atoms(result_df, equivalent_groups, conf_ids)
-            st.subheader("7. Equivalent-atom averaged table")
-            st.dataframe(eq_df, use_container_width=True)
-
-            st.download_button(
-                label="Download equivalent-atom averaged table (CSV)",
-                data=dataframe_to_csv_bytes(eq_df),
-                file_name="equivalent_atom_averaged_nmr.csv",
-                mime="text/csv"
-            )
-
-        # -------------------------
-        # downloads
-        # -------------------------
-        st.subheader("8. Download outputs")
-
-        st.download_button(
-            label="Download per-conformer shielding table (CSV)",
-            data=dataframe_to_csv_bytes(per_conf_df),
-            file_name="per_conformer_isotropic_shieldings.csv",
-            mime="text/csv"
+        result_df = shielding_to_shift(
+            avg_df,
+            mode="linear",
+            slope_H=slope_H,
+            intercept_H=intercept_H,
+            slope_C=slope_C,
+            intercept_C=intercept_C,
         )
 
-        st.download_button(
-            label="Download per-atom Boltzmann averaged table (CSV)",
-            data=dataframe_to_csv_bytes(result_df),
-            file_name="boltzmann_averaged_nmr.csv",
-            mime="text/csv"
-        )
+    st.subheader("6. Per-atom Boltzmann-averaged shielding / shift table")
+    st.dataframe(result_df, use_container_width=True)
+
+    # -----------------------------------------------------
+    # Equivalent atom averages
+    # -----------------------------------------------------
+    if equivalent_groups:
+        eq_df = average_equivalent_atoms(result_df, equivalent_groups)
+        st.subheader("7. Equivalent-atom averaged table")
+        st.dataframe(eq_df, use_container_width=True)
 
         st.download_button(
-            label="Download energy / weight table (CSV)",
-            data=dataframe_to_csv_bytes(valid_df),
-            file_name="boltzmann_weights.csv",
-            mime="text/csv"
+            label="Download equivalent-atom averaged table (CSV)",
+            data=dataframe_to_csv_bytes(eq_df),
+            file_name="equivalent_atom_averaged_nmr.csv",
+            mime="text/csv",
         )
+
+    # -----------------------------------------------------
+    # Downloads
+    # -----------------------------------------------------
+    st.subheader("8. Download outputs")
+
+    st.download_button(
+        label="Download per-conformer shielding table (CSV)",
+        data=dataframe_to_csv_bytes(per_conf_df),
+        file_name="per_conformer_isotropic_shieldings.csv",
+        mime="text/csv",
+    )
+
+    st.download_button(
+        label="Download per-atom Boltzmann averaged table (CSV)",
+        data=dataframe_to_csv_bytes(result_df),
+        file_name="boltzmann_averaged_nmr.csv",
+        mime="text/csv",
+    )
+
+    st.download_button(
+        label="Download energy / weight table (CSV)",
+        data=dataframe_to_csv_bytes(valid_df),
+        file_name="boltzmann_weights.csv",
+        mime="text/csv",
+    )
 
 else:
     st.info("Please upload both opt+freq logs and GIAO logs.")
