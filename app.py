@@ -9,12 +9,21 @@ HARTREE_TO_KCAL = 627.509474
 R_KCAL = 0.0019872041  # kcal mol^-1 K^-1
 
 st.title("Gaussian NMR Boltzmann Averaging App")
-st.caption("Ver. 1.2")
+st.caption("Ver. 1.3")
 st.write(
     "Upload Gaussian opt+freq logs and GIAO logs, match conformers by filename, "
     "extract SCF or Gibbs free energies, calculate Boltzmann-averaged isotropic shieldings, "
     "and convert them to chemical shifts using manual references, a TMS log, or linear scaling."
 )
+
+# =========================================================
+# Session state initialization
+# =========================================================
+if "equivalent_groups_ui" not in st.session_state:
+    st.session_state["equivalent_groups_ui"] = []
+
+if "latest_atom_table" not in st.session_state:
+    st.session_state["latest_atom_table"] = pd.DataFrame(columns=["atom_index", "element"])
 
 # =========================================================
 # Helper functions
@@ -68,11 +77,6 @@ def extract_gibbs_free_energy(text: str):
 
 
 def extract_last_scf_energy(text: str):
-    """
-    Extract the last SCF Done energy from Gaussian log.
-    Example:
-      SCF Done:  E(RB3LYP) =  -1234.56789012     A.U. after ...
-    """
     pattern = re.compile(r"SCF Done:\s+E\([RU]?[A-Za-z0-9]+\)\s*=\s*(-?\d+\.\d+)")
     matches = pattern.findall(text)
     if matches:
@@ -205,41 +209,6 @@ def shielding_to_shift(
     return out
 
 
-def parse_equivalent_groups(text):
-    """
-    Input format example:
-      H_a: 1,2,3
-      OMe: 45,46,47
-      C_ring: 10,12
-    """
-    groups = []
-    lines = [x.strip() for x in text.splitlines() if x.strip()]
-
-    for i, line in enumerate(lines, start=1):
-        if ":" in line:
-            label, atom_part = line.split(":", 1)
-            label = label.strip()
-            atom_part = atom_part.strip()
-        else:
-            label = f"group_{i}"
-            atom_part = line
-
-        atoms = []
-        for token in atom_part.split(","):
-            token = token.strip()
-            if token:
-                try:
-                    atoms.append(int(token))
-                except Exception:
-                    pass
-
-        atoms = sorted(set(atoms))
-        if atoms:
-            groups.append({"label": label, "atoms": atoms})
-
-    return groups
-
-
 def average_equivalent_atoms(df, groups):
     """
     For each user-defined equivalent atom group, average:
@@ -292,6 +261,29 @@ def average_equivalent_atoms(df, groups):
 
 def dataframe_to_csv_bytes(df):
     return df.to_csv(index=False).encode("utf-8")
+
+
+def get_registered_atom_set(groups):
+    atom_set = set()
+    for g in groups:
+        atom_set.update(g["atoms"])
+    return atom_set
+
+
+def make_atom_option_labels(atom_df):
+    labels = []
+    for _, row in atom_df.iterrows():
+        labels.append(f'{row["atom_index"]} ({row["element"]})')
+    return labels
+
+
+def parse_atom_indices_from_labels(labels):
+    atoms = []
+    for label in labels:
+        m = re.match(r"^\s*(\d+)", str(label))
+        if m:
+            atoms.append(int(m.group(1)))
+    return sorted(set(atoms))
 
 
 # =========================================================
@@ -358,34 +350,9 @@ element_filter = st.sidebar.selectbox(
 )
 
 # =========================================================
-# Equivalent atom groups
+# Upload files
 # =========================================================
-st.subheader("1. Optional equivalent atom groups")
-eq_text = st.text_area(
-    "Define equivalent atom groups (one group per line)",
-    value="",
-    height=140,
-    placeholder="Examples:\nH_a: 1,2,3\nOMe: 45,46,47\nC_eq: 10,12",
-)
-
-equivalent_groups = parse_equivalent_groups(eq_text)
-
-if equivalent_groups:
-    parsed_rows = []
-    for g in equivalent_groups:
-        parsed_rows.append(
-            {
-                "label": g["label"],
-                "atoms": ", ".join(map(str, g["atoms"])),
-            }
-        )
-    st.write("Parsed equivalent groups:")
-    st.dataframe(pd.DataFrame(parsed_rows), use_container_width=True)
-
-# =========================================================
-# File upload
-# =========================================================
-st.subheader("2. Upload files")
+st.subheader("1. Upload files")
 
 opt_files = st.file_uploader(
     "Upload opt+freq log files",
@@ -400,6 +367,10 @@ giao_files = st.file_uploader(
     accept_multiple_files=True,
     key="giao_files",
 )
+
+result_df = None
+per_conf_df = None
+valid_df = None
 
 if opt_files and giao_files:
     # -----------------------------------------------------
@@ -451,11 +422,11 @@ if opt_files and giao_files:
     giao_df = pd.DataFrame(giao_records)
 
     # -----------------------------------------------------
-    # Match opt+freq and GIAO logs
+    # Match logs
     # -----------------------------------------------------
     pair_df = pd.merge(opt_df, giao_df, on="conf_id", how="inner")
 
-    st.subheader("3. Matched conformers")
+    st.subheader("2. Matched conformers")
     st.dataframe(pair_df, use_container_width=True)
 
     if energy_mode == "Gibbs free energy":
@@ -487,7 +458,7 @@ if opt_files and giao_files:
     valid_df["relative_energy_kcal"] = rel_kcal
     valid_df["boltzmann_weight"] = weights
 
-    st.subheader("4. Energies and Boltzmann weights")
+    st.subheader("3. Energies and Boltzmann weights")
     st.dataframe(valid_df, use_container_width=True)
 
     # -----------------------------------------------------
@@ -496,6 +467,10 @@ if opt_files and giao_files:
     conf_ids = valid_df["conf_id"].tolist()
     per_conf_df = build_per_conformer_shielding_table(shielding_map, conf_ids)
 
+    # store atom table for UI
+    atom_table_full = per_conf_df[["atom_index", "element"]].drop_duplicates().sort_values("atom_index").reset_index(drop=True)
+    st.session_state["latest_atom_table"] = atom_table_full.copy()
+
     if element_filter == "H":
         per_conf_df = per_conf_df[per_conf_df["element"] == "H"].copy()
     elif element_filter == "C":
@@ -503,7 +478,7 @@ if opt_files and giao_files:
     elif element_filter == "Other":
         per_conf_df = per_conf_df[~per_conf_df["element"].isin(["H", "C"])].copy()
 
-    st.subheader("5. Isotropic shielding table for each conformer")
+    st.subheader("4. Isotropic shielding table for each conformer")
     st.dataframe(per_conf_df, use_container_width=True)
 
     # -----------------------------------------------------
@@ -535,35 +510,118 @@ if opt_files and giao_files:
             intercept_C=intercept_C,
         )
 
-    st.subheader("6. Per-atom Boltzmann-averaged shielding / shift table")
+    st.subheader("5. Per-atom Boltzmann-averaged shielding / shift table")
     st.dataframe(result_df, use_container_width=True)
 
-    # -----------------------------------------------------
-    # Equivalent atom averages
-    # -----------------------------------------------------
-    if equivalent_groups:
-        eq_df = average_equivalent_atoms(result_df, equivalent_groups)
+# =========================================================
+# Equivalent atom group UI
+# =========================================================
+st.subheader("6. Equivalent atom groups")
+
+atom_df_ui = st.session_state["latest_atom_table"].copy()
+
+if atom_df_ui.empty:
+    st.info("After valid GIAO files are uploaded, the atom list will appear here.")
+else:
+    ui_filter = st.selectbox(
+        "Filter atoms for group selection",
+        ["All", "H", "C", "Other"],
+        index=0,
+        key="eq_ui_filter",
+    )
+
+    if ui_filter == "H":
+        atom_df_ui = atom_df_ui[atom_df_ui["element"] == "H"].copy()
+    elif ui_filter == "C":
+        atom_df_ui = atom_df_ui[atom_df_ui["element"] == "C"].copy()
+    elif ui_filter == "Other":
+        atom_df_ui = atom_df_ui[~atom_df_ui["element"].isin(["H", "C"])].copy()
+
+    registered_atoms = get_registered_atom_set(st.session_state["equivalent_groups_ui"])
+    atom_df_ui["already_registered"] = atom_df_ui["atom_index"].isin(registered_atoms)
+
+    st.write("Available atoms")
+    st.dataframe(atom_df_ui, use_container_width=True)
+
+    group_label = st.text_input("Group label", value="", key="eq_group_label")
+
+    atom_option_labels = make_atom_option_labels(atom_df_ui[["atom_index", "element"]])
+    selected_atom_labels = st.multiselect(
+        "Select equivalent atom indices",
+        options=atom_option_labels,
+        default=[],
+        key="eq_selected_atoms",
+    )
+
+    selected_atoms = parse_atom_indices_from_labels(selected_atom_labels)
+
+    if selected_atoms:
+        overlapping_atoms = sorted(set(selected_atoms) & registered_atoms)
+        if overlapping_atoms:
+            st.warning(
+                "These atom indices are already included in existing groups: "
+                + ", ".join(map(str, overlapping_atoms))
+            )
+
+    if st.button("Add equivalent atom group", key="add_eq_group"):
+        clean_label = group_label.strip()
+
+        if not clean_label:
+            st.warning("Please enter a group label.")
+        elif not selected_atoms:
+            st.warning("Please select at least one atom.")
+        else:
+            st.session_state["equivalent_groups_ui"].append(
+                {
+                    "label": clean_label,
+                    "atoms": selected_atoms,
+                }
+            )
+            st.rerun()
+
+# =========================================================
+# Registered groups
+# =========================================================
+if st.session_state["equivalent_groups_ui"]:
+    st.write("Registered equivalent atom groups")
+
+    registered_rows = []
+    for g in st.session_state["equivalent_groups_ui"]:
+        registered_rows.append(
+            {
+                "label": g["label"],
+                "atom_indices": ", ".join(map(str, g["atoms"])),
+                "n_atoms": len(g["atoms"]),
+            }
+        )
+    st.dataframe(pd.DataFrame(registered_rows), use_container_width=True)
+
+    for i, g in enumerate(st.session_state["equivalent_groups_ui"]):
+        col1, col2, col3 = st.columns([2, 6, 1])
+        col1.write(f'**{g["label"]}**')
+        col2.write(", ".join(map(str, g["atoms"])))
+        if col3.button("Delete", key=f"delete_group_{i}"):
+            st.session_state["equivalent_groups_ui"].pop(i)
+            st.rerun()
+
+# =========================================================
+# Equivalent-atom averaged result + downloads
+# =========================================================
+if result_df is not None:
+    if st.session_state["equivalent_groups_ui"]:
+        eq_df = average_equivalent_atoms(result_df, st.session_state["equivalent_groups_ui"])
         st.subheader("7. Equivalent-atom averaged table")
         st.dataframe(eq_df, use_container_width=True)
 
-        st.download_button(
-            label="Download equivalent-atom averaged table (CSV)",
-            data=dataframe_to_csv_bytes(eq_df),
-            file_name="equivalent_atom_averaged_nmr.csv",
-            mime="text/csv",
-        )
-
-    # -----------------------------------------------------
-    # Downloads
-    # -----------------------------------------------------
     st.subheader("8. Download outputs")
 
-    st.download_button(
-        label="Download per-conformer shielding table (CSV)",
-        data=dataframe_to_csv_bytes(per_conf_df),
-        file_name="per_conformer_isotropic_shieldings.csv",
-        mime="text/csv",
-    )
+    if per_conf_df is not None:
+        st.download_button(
+            label="Download per-conformer shielding table (CSV)",
+            data=dataframe_to_csv_bytes(per_conf_df),
+            file_name="per_conformer_isotropic_shieldings.csv",
+            mime="text/csv",
+        )
 
     st.download_button(
         label="Download per-atom Boltzmann averaged table (CSV)",
@@ -572,12 +630,19 @@ if opt_files and giao_files:
         mime="text/csv",
     )
 
-    st.download_button(
-        label="Download energy / weight table (CSV)",
-        data=dataframe_to_csv_bytes(valid_df),
-        file_name="boltzmann_weights.csv",
-        mime="text/csv",
-    )
+    if valid_df is not None:
+        st.download_button(
+            label="Download energy / weight table (CSV)",
+            data=dataframe_to_csv_bytes(valid_df),
+            file_name="boltzmann_weights.csv",
+            mime="text/csv",
+        )
 
-else:
-    st.info("Please upload both opt+freq logs and GIAO logs.")
+    if st.session_state["equivalent_groups_ui"]:
+        eq_df = average_equivalent_atoms(result_df, st.session_state["equivalent_groups_ui"])
+        st.download_button(
+            label="Download equivalent-atom averaged table (CSV)",
+            data=dataframe_to_csv_bytes(eq_df),
+            file_name="equivalent_atom_averaged_nmr.csv",
+            mime="text/csv",
+        )
