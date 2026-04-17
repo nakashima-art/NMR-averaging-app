@@ -9,7 +9,7 @@ HARTREE_TO_KCAL = 627.509474
 R_KCAL = 0.0019872041  # kcal mol^-1 K^-1
 
 st.title("Gaussian NMR Boltzmann Averaging App")
-st.caption("Ver. 1.3")
+st.caption("Ver. 1.4")
 st.write(
     "Upload Gaussian opt+freq logs and GIAO logs, match conformers by filename, "
     "extract SCF or Gibbs free energies, calculate Boltzmann-averaged isotropic shieldings, "
@@ -24,6 +24,15 @@ if "equivalent_groups_ui" not in st.session_state:
 
 if "latest_atom_table" not in st.session_state:
     st.session_state["latest_atom_table"] = pd.DataFrame(columns=["atom_index", "element"])
+
+if "tms_ref_H" not in st.session_state:
+    st.session_state["tms_ref_H"] = None
+
+if "tms_ref_C" not in st.session_state:
+    st.session_state["tms_ref_C"] = None
+
+if "tms_ref_filename" not in st.session_state:
+    st.session_state["tms_ref_filename"] = None
 
 # =========================================================
 # Helper functions
@@ -114,6 +123,9 @@ def get_tms_reference_from_log(text):
 
     if df.empty:
         return None, None, "No isotropic shielding entries were found in the TMS log."
+
+    if not check_normal_termination(text):
+        return None, None, "The TMS log did not terminate normally."
 
     h_df = df[df["element"] == "H"].copy()
     c_df = df[df["element"] == "C"].copy()
@@ -326,16 +338,33 @@ elif shift_mode == "TMS log file":
 
     if tms_file is not None:
         tms_text = read_text(tms_file)
-        ref_H, ref_C, tms_error = get_tms_reference_from_log(tms_text)
+        parsed_ref_H, parsed_ref_C, tms_error = get_tms_reference_from_log(tms_text)
 
         if tms_error:
+            st.session_state["tms_ref_H"] = None
+            st.session_state["tms_ref_C"] = None
+            st.session_state["tms_ref_filename"] = None
             st.sidebar.error(tms_error)
         else:
+            st.session_state["tms_ref_H"] = parsed_ref_H
+            st.session_state["tms_ref_C"] = parsed_ref_C
+            st.session_state["tms_ref_filename"] = tms_file.name
             st.sidebar.success("TMS reference extracted successfully.")
-            st.sidebar.write(f"TMS 1H reference shielding: {ref_H:.4f}")
-            st.sidebar.write(f"TMS 13C reference shielding: {ref_C:.4f}")
+            st.sidebar.write(f"File: {tms_file.name}")
+            st.sidebar.write(f"TMS 1H reference shielding: {parsed_ref_H:.4f}")
+            st.sidebar.write(f"TMS 13C reference shielding: {parsed_ref_C:.4f}")
+
+    elif st.session_state["tms_ref_H"] is not None and st.session_state["tms_ref_C"] is not None:
+        st.sidebar.success("Previously loaded TMS reference is being used.")
+        if st.session_state["tms_ref_filename"]:
+            st.sidebar.write(f'File: {st.session_state["tms_ref_filename"]}')
+        st.sidebar.write(f'TMS 1H reference shielding: {st.session_state["tms_ref_H"]:.4f}')
+        st.sidebar.write(f'TMS 13C reference shielding: {st.session_state["tms_ref_C"]:.4f}')
     else:
         st.sidebar.info("Please upload a TMS GIAO log file.")
+
+    ref_H = st.session_state["tms_ref_H"]
+    ref_C = st.session_state["tms_ref_C"]
 
 elif shift_mode == "Linear scaling":
     slope_H = st.sidebar.number_input("Slope for 1H", value=1.0)
@@ -371,6 +400,7 @@ giao_files = st.file_uploader(
 result_df = None
 per_conf_df = None
 valid_df = None
+eq_df = None
 
 if opt_files and giao_files:
     # -----------------------------------------------------
@@ -446,9 +476,10 @@ if opt_files and giao_files:
         st.error("No valid matched conformers were found.")
         st.stop()
 
+    tms_ready = True
     if shift_mode == "TMS log file" and (ref_H is None or ref_C is None):
-        st.error("Please upload a valid TMS GIAO log file before calculating chemical shifts.")
-        st.stop()
+        tms_ready = False
+        st.warning("TMS reference has not been loaded yet. Please upload a valid TMS GIAO log file in the sidebar.")
 
     # -----------------------------------------------------
     # Boltzmann weights
@@ -465,12 +496,17 @@ if opt_files and giao_files:
     # Per-conformer shielding table
     # -----------------------------------------------------
     conf_ids = valid_df["conf_id"].tolist()
-    per_conf_df = build_per_conformer_shielding_table(shielding_map, conf_ids)
+    per_conf_df_full = build_per_conformer_shielding_table(shielding_map, conf_ids)
 
-    # store atom table for UI
-    atom_table_full = per_conf_df[["atom_index", "element"]].drop_duplicates().sort_values("atom_index").reset_index(drop=True)
+    atom_table_full = (
+        per_conf_df_full[["atom_index", "element"]]
+        .drop_duplicates()
+        .sort_values("atom_index")
+        .reset_index(drop=True)
+    )
     st.session_state["latest_atom_table"] = atom_table_full.copy()
 
+    per_conf_df = per_conf_df_full.copy()
     if element_filter == "H":
         per_conf_df = per_conf_df[per_conf_df["element"] == "H"].copy()
     elif element_filter == "C":
@@ -494,12 +530,16 @@ if opt_files and giao_files:
             ref_C=ref_C,
         )
     elif shift_mode == "TMS log file":
-        result_df = shielding_to_shift(
-            avg_df,
-            mode="tms_log",
-            ref_H=ref_H,
-            ref_C=ref_C,
-        )
+        if tms_ready:
+            result_df = shielding_to_shift(
+                avg_df,
+                mode="tms_log",
+                ref_H=ref_H,
+                ref_C=ref_C,
+            )
+        else:
+            result_df = avg_df.copy()
+            result_df["chemical_shift"] = np.nan
     else:
         result_df = shielding_to_shift(
             avg_df,
@@ -638,8 +678,7 @@ if result_df is not None:
             mime="text/csv",
         )
 
-    if st.session_state["equivalent_groups_ui"]:
-        eq_df = average_equivalent_atoms(result_df, st.session_state["equivalent_groups_ui"])
+    if eq_df is not None:
         st.download_button(
             label="Download equivalent-atom averaged table (CSV)",
             data=dataframe_to_csv_bytes(eq_df),
