@@ -1,1 +1,328 @@
 
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      background: transparent;
+      font-family: sans-serif;
+    }
+    #toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 14px;
+      align-items: center;
+      padding: 7px 10px;
+      border: 1px solid rgba(120, 120, 120, 0.25);
+      border-bottom: none;
+      border-radius: 8px 8px 0 0;
+      font-size: 14px;
+    }
+    #viewer {
+      width: 100%;
+      height: 470px;
+      position: relative;
+      border: 1px solid rgba(120, 120, 120, 0.25);
+      border-radius: 0 0 8px 8px;
+      overflow: hidden;
+      background: white;
+    }
+    #status {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      box-sizing: border-box;
+      color: #555;
+      text-align: center;
+      pointer-events: none;
+      z-index: 2;
+    }
+    label {
+      display: inline-flex;
+      gap: 5px;
+      align-items: center;
+      cursor: pointer;
+      user-select: none;
+    }
+    #selection-text {
+      margin-left: auto;
+      opacity: 0.8;
+    }
+  </style>
+</head>
+<body>
+  <div id="toolbar">
+    <label><input id="show-h" type="checkbox" checked /> <span id="show-h-text">H numbers</span></label>
+    <label><input id="show-all" type="checkbox" /> <span id="show-all-text">All atom numbers</span></label>
+    <label><input id="hydrogen-only" type="checkbox" /> <span id="hydrogen-only-text">H only</span></label>
+    <span id="selection-text">Selected: none</span>
+  </div>
+  <div id="viewer"><div id="status">Loading 3D viewer…</div></div>
+
+  <script>
+    // Minimal Streamlit component protocol. This avoids loading
+    // streamlit-component-lib from an external CDN.
+    const Streamlit = {
+      RENDER_EVENT: "streamlit:render",
+      events: new EventTarget(),
+      _lastHeight: null,
+
+      setComponentReady() {
+        window.addEventListener("message", (event) => {
+          const data = event.data || {};
+          if (data.type !== this.RENDER_EVENT) return;
+          const customEvent = new CustomEvent(this.RENDER_EVENT, {
+            detail: {
+              args: data.args || {},
+              disabled: Boolean(data.disabled),
+              theme: data.theme || null,
+            },
+          });
+          this.events.dispatchEvent(customEvent);
+        });
+        window.parent.postMessage({
+          isStreamlitMessage: true,
+          type: "streamlit:componentReady",
+          apiVersion: 1,
+        }, "*");
+      },
+
+      setComponentValue(value) {
+        window.parent.postMessage({
+          isStreamlitMessage: true,
+          type: "streamlit:setComponentValue",
+          value: value,
+          dataType: "json",
+        }, "*");
+      },
+
+      setFrameHeight(height) {
+        const h = Number(height || document.body.scrollHeight);
+        if (h === this._lastHeight) return;
+        this._lastHeight = h;
+        window.parent.postMessage({
+          isStreamlitMessage: true,
+          type: "streamlit:setFrameHeight",
+          height: h,
+        }, "*");
+      },
+    };
+
+    let viewer = null;
+    let model = null;
+    let selected = [];
+    let currentXYZ = "";
+    let requestedHeight = 520;
+    let pendingArgs = null;
+    let libraryPromise = null;
+    let currentLanguage = "en";
+
+    const UI = {
+      en: {
+        hNumbers: "H numbers",
+        allNumbers: "All atom numbers",
+        hOnly: "H only",
+        selected: "Selected",
+        none: "none",
+        loading: "Loading 3D viewer…",
+        noCoordinates: "No molecular coordinates were supplied.",
+        loadError: "The 3Dmol.js viewer could not be loaded. Check whether external CDN access is blocked by the browser or deployment network."
+      },
+      ja: {
+        hNumbers: "水素原子番号",
+        allNumbers: "全原子番号",
+        hOnly: "水素のみ",
+        selected: "選択中",
+        none: "なし",
+        loading: "3Dビューアを読み込み中…",
+        noCoordinates: "分子座標が指定されていません。",
+        loadError: "3Dmol.jsビューアを読み込めませんでした。ブラウザまたはデプロイ環境で外部CDNへのアクセスが制限されていないか確認してください。"
+      }
+    };
+
+    function ui() {
+      return UI[currentLanguage] || UI.en;
+    }
+
+    function updateUIStrings() {
+      document.getElementById("show-h-text").textContent = ui().hNumbers;
+      document.getElementById("show-all-text").textContent = ui().allNumbers;
+      document.getElementById("hydrogen-only-text").textContent = ui().hOnly;
+      updateSelectionText();
+    }
+
+    function setStatus(message) {
+      const status = document.getElementById("status");
+      status.textContent = message || "";
+      status.style.display = message ? "flex" : "none";
+    }
+
+    function loadScript(url) {
+      return new Promise((resolve, reject) => {
+        const script = document.createElement("script");
+        script.src = url;
+        script.async = true;
+        script.onload = resolve;
+        script.onerror = () => reject(new Error(`Failed to load ${url}`));
+        document.head.appendChild(script);
+      });
+    }
+
+    async function ensure3Dmol() {
+      if (window.$3Dmol) return;
+      if (!libraryPromise) {
+        libraryPromise = (async () => {
+          const urls = [
+            "https://3Dmol.org/build/3Dmol-min.js",
+            "https://cdn.jsdelivr.net/npm/3dmol/build/3Dmol-min.js",
+            "https://unpkg.com/3dmol/build/3Dmol-min.js",
+          ];
+          let lastError = null;
+          for (const url of urls) {
+            try {
+              await loadScript(url);
+              if (window.$3Dmol) return;
+            } catch (error) {
+              lastError = error;
+            }
+          }
+          throw lastError || new Error("3Dmol.js could not be loaded.");
+        })();
+      }
+      return libraryPromise;
+    }
+
+    function updateSelectionText() {
+      const target = document.getElementById("selection-text");
+      target.textContent = selected.length
+        ? `${ui().selected}: ${selected.join(", ")}`
+        : `${ui().selected}: ${ui().none}`;
+    }
+
+    function atomNumber(atom) {
+      if (typeof atom.index === "number") return atom.index + 1;
+      if (typeof atom.serial === "number") return atom.serial;
+      return null;
+    }
+
+    function applyStylesAndLabels() {
+      if (!viewer || !model) return;
+
+      viewer.removeAllLabels();
+      viewer.setStyle({}, {
+        stick: { radius: 0.13 },
+        sphere: { scale: 0.25 }
+      });
+
+      const hydrogenOnly = document.getElementById("hydrogen-only").checked;
+      if (hydrogenOnly) {
+        viewer.setStyle({ elem: "H" }, {
+          stick: { radius: 0.10 },
+          sphere: { scale: 0.30 }
+        });
+        viewer.setStyle({ not: { elem: "H" } }, { hidden: true });
+      }
+
+      for (const number of selected) {
+        viewer.setStyle({ index: number - 1 }, {
+          sphere: { scale: 0.55, color: "yellow" },
+          stick: { radius: 0.17, color: "yellow" }
+        });
+      }
+
+      const showH = document.getElementById("show-h").checked;
+      const showAll = document.getElementById("show-all").checked;
+      const atoms = model.selectedAtoms({});
+      atoms.forEach(atom => {
+        const number = atomNumber(atom);
+        if (!number) return;
+        const shouldLabel = showAll || (showH && atom.elem === "H");
+        if (shouldLabel) {
+          viewer.addLabel(String(number), {
+            position: { x: atom.x, y: atom.y, z: atom.z },
+            backgroundOpacity: 0.65,
+            fontSize: 11,
+            inFront: true
+          });
+        }
+      });
+
+      updateSelectionText();
+      viewer.render();
+    }
+
+    function buildViewer(xyz) {
+      const element = document.getElementById("viewer");
+      element.innerHTML = '<div id="status"></div>';
+      viewer = window.$3Dmol.createViewer(element, { backgroundColor: "white" });
+      model = viewer.addModel(xyz, "xyz");
+      viewer.setClickable({}, true, function(atom) {
+        const number = atomNumber(atom);
+        if (!number) return;
+        const pos = selected.indexOf(number);
+        if (pos >= 0) selected.splice(pos, 1);
+        else selected.push(number);
+        selected.sort((a, b) => a - b);
+        applyStylesAndLabels();
+        Streamlit.setComponentValue(selected);
+      });
+      viewer.zoomTo();
+      setStatus("");
+      applyStylesAndLabels();
+    }
+
+    async function renderArgs(args) {
+      pendingArgs = args || {};
+      currentLanguage = pendingArgs.language === "ja" ? "ja" : "en";
+      updateUIStrings();
+      requestedHeight = Number(pendingArgs.height || 520);
+      Streamlit.setFrameHeight(requestedHeight);
+
+      const newSelected = Array.isArray(pendingArgs.selected_atoms)
+        ? pendingArgs.selected_atoms.map(Number).filter(Number.isFinite)
+        : [];
+      selected = [...new Set(newSelected)].sort((a, b) => a - b);
+
+      try {
+        await ensure3Dmol();
+        if (args !== pendingArgs) return;
+        const xyz = pendingArgs.xyz || "";
+        if (!xyz.trim()) {
+          setStatus(ui().noCoordinates);
+          return;
+        }
+        if (xyz !== currentXYZ || !viewer) {
+          currentXYZ = xyz;
+          buildViewer(currentXYZ);
+        } else {
+          applyStylesAndLabels();
+        }
+      } catch (error) {
+        console.error(error);
+        setStatus(ui().loadError);
+      }
+    }
+
+    function onRender(event) {
+      renderArgs(event.detail.args || {});
+    }
+
+    ["show-h", "show-all", "hydrogen-only"].forEach(id => {
+      document.getElementById(id).addEventListener("change", applyStylesAndLabels);
+    });
+
+    Streamlit.events.addEventListener(Streamlit.RENDER_EVENT, onRender);
+    Streamlit.setComponentReady();
+    Streamlit.setFrameHeight(requestedHeight);
+  </script>
+</body>
+</html>
+
