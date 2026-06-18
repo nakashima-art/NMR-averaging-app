@@ -11,7 +11,7 @@ st.set_page_config(page_title="Gaussian NMR Boltzmann Averaging App", layout="wi
 HARTREE_TO_KCAL = 627.509474
 R_KCAL = 0.0019872041  # kcal mol^-1 K^-1
 
-APP_VERSION = "2.4"
+APP_VERSION = "2.5"
 
 DEVELOPER_INFO = {
     "name": "Ken-ichi Nakashima",
@@ -115,15 +115,20 @@ UI_TEXT = {
         "label_status_desc": "This table helps you check for missing labels across atoms.",
         "label_status_filter": "Show label status for",
         "only_unlabeled": "Show only unlabeled atoms",
+        "only_labeled": "Show only labeled atoms",
+        "apply_table_edits": "Apply table edits",
+        "label_count": "Label count",
+        "assigned_labels": "Assigned labels",
         "mapping_status": "Mapping status",
         "mapping_labels": "Labels",
         "mapping_registered": "Registered labels",
-        "label_count": "Label count",
-        "assigned_labels": "Assigned labels",
         "eq_avg_header": "7. Equivalent-atom averaged table",
         "download_header": "8. Download outputs",
+        "main_outputs": "Main outputs",
+        "additional_outputs": "Additional outputs",
+        "download_main": "Download main NMR output (CSV)",
+        "download_parameters": "Download parameters (JSON)",
         "download_per_conf": "Download per-conformer shielding table (CSV)",
-        "download_avg": "Download per-atom Boltzmann averaged table (CSV)",
         "download_weights": "Download energy / weight table (CSV)",
         "download_eq": "Download equivalent-atom averaged table (CSV)",
         "settings_io_header": "Settings save / load",
@@ -137,6 +142,7 @@ UI_TEXT = {
         "coord_not_found": "No coordinate block could be extracted from valid files, so the structure picker is unavailable.",
         "save_project_desc": "The JSON file stores only labels / equivalent groups, not the Gaussian logs or calculation results.",
         "mixed_elements_prefix": "Mixed",
+        "table_edits_applied": "Table edits were applied.",
     },
     "ja": {
         "title": "Gaussian NMR Boltzmann Averaging App",
@@ -218,15 +224,20 @@ UI_TEXT = {
         "label_status_desc": "全原子に対するラベル漏れ確認用のテーブルです。",
         "label_status_filter": "ラベル状況を表示する対象",
         "only_unlabeled": "未ラベル原子のみ表示",
+        "only_labeled": "ラベル付き原子のみ表示",
+        "apply_table_edits": "テーブル編集を反映",
+        "label_count": "ラベル数",
+        "assigned_labels": "割り当てラベル",
         "mapping_status": "マッピング状況",
         "mapping_labels": "ラベル",
         "mapping_registered": "登録数",
-        "label_count": "ラベル数",
-        "assigned_labels": "割り当てラベル",
         "eq_avg_header": "7. Equivalent atom 平均テーブル",
         "download_header": "8. 出力ファイルのダウンロード",
+        "main_outputs": "Main outputs",
+        "additional_outputs": "Additional outputs",
+        "download_main": "メイン NMR 出力 (CSV) をダウンロード",
+        "download_parameters": "パラメーター (JSON) をダウンロード",
         "download_per_conf": "各配座 shielding テーブル (CSV) をダウンロード",
-        "download_avg": "原子ごとの Boltzmann 平均テーブル (CSV) をダウンロード",
         "download_weights": "エネルギー / 存在比テーブル (CSV) をダウンロード",
         "download_eq": "Equivalent atom 平均テーブル (CSV) をダウンロード",
         "settings_io_header": "Settings save / load",
@@ -240,6 +251,7 @@ UI_TEXT = {
         "coord_not_found": "有効ファイルから座標ブロックを抽出できなかったため、構造ピッカーは使用できません。",
         "save_project_desc": "JSON ファイルにはラベル / equivalent group の情報のみを保存し、Gaussian ログや計算結果は保存しません。",
         "mixed_elements_prefix": "Mixed",
+        "table_edits_applied": "テーブル編集を反映しました。",
     },
 }
 
@@ -665,6 +677,107 @@ def build_atom_label_status_table(atom_df, mappings):
     return out
 
 
+def rebuild_mappings_from_status_table(df):
+    label_to_atoms = {}
+
+    for _, row in df.iterrows():
+        atom_number = int(row["atom_index"])
+        raw = "" if pd.isna(row["assigned_labels"]) else str(row["assigned_labels"]).strip()
+        if not raw:
+            continue
+
+        labels = [x.strip() for x in raw.split(",") if x.strip()]
+        for label in labels:
+            label_to_atoms.setdefault(label, []).append(atom_number)
+
+    rebuilt = []
+    for label, atom_numbers in label_to_atoms.items():
+        atom_numbers = sorted(set(atom_numbers))
+        rebuilt.append(
+            {
+                "label": label,
+                "atom_numbers": atom_numbers,
+                "atom_indices": [atom_index_from_user_number(n) for n in atom_numbers],
+            }
+        )
+
+    rebuilt.sort(key=lambda x: x["label"])
+    return rebuilt
+
+
+def build_main_output_table(result_df, atom_mappings, conf_ids):
+    out = result_df.copy()
+
+    atom_to_labels = {}
+    for item in atom_mappings:
+        for atom_number in item.get("atom_numbers", []):
+            atom_to_labels.setdefault(int(atom_number), []).append(item["label"])
+
+    out["atom_label"] = out["atom_index"].map(
+        lambda x: ", ".join(atom_to_labels.get(int(x), []))
+    )
+
+    weight_cols = [f"weight_{cid}" for cid in conf_ids if f"weight_{cid}" in out.columns]
+    shielding_cols = [f"shielding_{cid}" for cid in conf_ids if f"shielding_{cid}" in out.columns]
+
+    preferred_cols = [
+        "atom_index",
+        "element",
+        "atom_label",
+        "chemical_shift",
+        "shielding_boltzmann",
+    ]
+    preferred_cols = [c for c in preferred_cols if c in out.columns]
+
+    ordered_cols = preferred_cols + weight_cols + shielding_cols
+    remaining_cols = [c for c in out.columns if c not in ordered_cols]
+    return out[ordered_cols + remaining_cols]
+
+
+def build_parameters_payload(
+    temperature,
+    energy_mode,
+    shift_mode,
+    ref_H,
+    ref_C,
+    slope_H,
+    intercept_H,
+    slope_C,
+    intercept_C,
+    output_prefix,
+    conf_ids,
+    valid_df,
+):
+    payload = {
+        "app": "Gaussian NMR Boltzmann Averaging App",
+        "version": APP_VERSION,
+        "output_prefix": output_prefix,
+        "temperature_K": temperature,
+        "energy_mode": energy_mode,
+        "shift_mode": shift_mode,
+        "reference_H": ref_H,
+        "reference_C": ref_C,
+        "slope_H": slope_H,
+        "intercept_H": intercept_H,
+        "slope_C": slope_C,
+        "intercept_C": intercept_C,
+        "conformer_ids": conf_ids,
+    }
+
+    if valid_df is not None and not valid_df.empty:
+        payload["conformers"] = valid_df[
+            ["conf_id", "opt_filename", "giao_filename", "energy_used_hartree", "relative_energy_kcal", "boltzmann_weight"]
+        ].to_dict(orient="records")
+    else:
+        payload["conformers"] = []
+
+    return payload
+
+
+def json_to_bytes(obj):
+    return json.dumps(obj, ensure_ascii=False, indent=2).encode("utf-8")
+
+
 with st.sidebar:
     selected_language = st.selectbox(
         "Language / 言語",
@@ -789,6 +902,9 @@ result_df = None
 per_conf_df = None
 valid_df = None
 eq_df = None
+main_output_df = None
+parameters_payload = None
+conf_ids = []
 output_prefix = build_output_prefix_from_giao(giao_files)
 
 if giao_files:
@@ -927,6 +1043,22 @@ if opt_files and giao_files:
             slope_C=slope_C,
             intercept_C=intercept_C,
         )
+
+    main_output_df = build_main_output_table(result_df, st.session_state["atom_mappings"], conf_ids)
+    parameters_payload = build_parameters_payload(
+        temperature=temperature,
+        energy_mode=energy_mode,
+        shift_mode=shift_mode,
+        ref_H=ref_H,
+        ref_C=ref_C,
+        slope_H=slope_H,
+        intercept_H=intercept_H,
+        slope_C=slope_C,
+        intercept_C=intercept_C,
+        output_prefix=output_prefix,
+        conf_ids=conf_ids,
+        valid_df=valid_df,
+    )
 
     with st.expander(t("matched_header"), expanded=False):
         st.dataframe(pair_df, use_container_width=True)
@@ -1094,18 +1226,13 @@ else:
         value=False,
         key="mapping_only_unlabeled",
     )
+    only_labeled = st.checkbox(
+        t("only_labeled"),
+        value=False,
+        key="mapping_only_labeled",
+    )
 
     label_status_df = build_atom_label_status_table(atom_df_ui, st.session_state["atom_mappings"])
-
-    allowed_elements = []
-    if t("h") in status_filter:
-        allowed_elements.append("H")
-    if t("c") in status_filter:
-        allowed_elements.append("C")
-    if t("other") in status_filter:
-        label_status_df = label_status_df[
-            label_status_df["element"].isin(["H", "C"]) | ~label_status_df["element"].isin(["H", "C"])
-        ]
 
     if status_filter:
         keep_mask = pd.Series(False, index=label_status_df.index)
@@ -1117,17 +1244,40 @@ else:
             keep_mask = keep_mask | (~label_status_df["element"].isin(["H", "C"]))
         label_status_df = label_status_df[keep_mask].copy()
 
-    if only_unlabeled:
+    if only_unlabeled and not only_labeled:
         label_status_df = label_status_df[label_status_df["label_count"] == 0].copy()
+    elif only_labeled and not only_unlabeled:
+        label_status_df = label_status_df[label_status_df["label_count"] > 0].copy()
 
-    label_status_df = label_status_df.rename(
+    display_status_df = label_status_df.rename(
         columns={
             "label_count": t("label_count"),
             "assigned_labels": t("assigned_labels"),
         }
+    ).copy()
+
+    edited_status_df = st.data_editor(
+        display_status_df,
+        use_container_width=True,
+        num_rows="fixed",
+        disabled=["atom_index", "element", t("label_count")],
+        key="atom_label_status_editor",
     )
 
-    st.dataframe(label_status_df, use_container_width=True)
+    if st.button(t("apply_table_edits"), key="apply_status_table_edits"):
+        edited_internal_df = edited_status_df.rename(
+            columns={
+                t("label_count"): "label_count",
+                t("assigned_labels"): "assigned_labels",
+            }
+        ).copy()
+
+        rebuilt_mappings = rebuild_mappings_from_status_table(edited_internal_df)
+        st.session_state["atom_mappings"] = rebuilt_mappings
+        st.session_state["mapping_selection"] = []
+        bump_picker_nonce()
+        st.success(t("table_edits_applied"))
+        st.rerun()
 
     st.markdown(f"**{t('settings_io_header')}**")
     st.caption(t("save_project_desc"))
@@ -1185,25 +1335,54 @@ if result_df is not None:
         st.subheader(t("eq_avg_header"))
         st.dataframe(eq_df, use_container_width=True)
 
+    main_output_df = build_main_output_table(result_df, st.session_state["atom_mappings"], conf_ids)
+    parameters_payload = build_parameters_payload(
+        temperature=temperature,
+        energy_mode=energy_mode,
+        shift_mode=shift_mode,
+        ref_H=ref_H,
+        ref_C=ref_C,
+        slope_H=slope_H,
+        intercept_H=intercept_H,
+        slope_C=slope_C,
+        intercept_C=intercept_C,
+        output_prefix=output_prefix,
+        conf_ids=conf_ids,
+        valid_df=valid_df,
+    )
+
     st.subheader(t("download_header"))
 
+    st.markdown(f"**{t('main_outputs')}**")
+    main_col1, main_col2 = st.columns(2)
+
+    main_col1.download_button(
+        label=t("download_main"),
+        data=dataframe_to_csv_bytes(main_output_df),
+        file_name=f"{output_prefix}_nmr_main_output.csv",
+        mime="text/csv",
+    )
+
+    main_col2.download_button(
+        label=t("download_parameters"),
+        data=json_to_bytes(parameters_payload),
+        file_name=f"{output_prefix}_nmr_parameters.json",
+        mime="application/json",
+    )
+
+    st.markdown(f"**{t('additional_outputs')}**")
+    add_col1, add_col2, add_col3 = st.columns(3)
+
     if per_conf_df is not None:
-        st.download_button(
+        add_col1.download_button(
             label=t("download_per_conf"),
             data=dataframe_to_csv_bytes(per_conf_df),
             file_name=f"{output_prefix}_per_conformer_isotropic_shieldings.csv",
             mime="text/csv",
         )
 
-    st.download_button(
-        label=t("download_avg"),
-        data=dataframe_to_csv_bytes(result_df),
-        file_name=f"{output_prefix}_boltzmann_averaged_nmr.csv",
-        mime="text/csv",
-    )
-
     if valid_df is not None:
-        st.download_button(
+        add_col2.download_button(
             label=t("download_weights"),
             data=dataframe_to_csv_bytes(valid_df),
             file_name=f"{output_prefix}_boltzmann_weights.csv",
@@ -1211,7 +1390,7 @@ if result_df is not None:
         )
 
     if eq_df is not None:
-        st.download_button(
+        add_col3.download_button(
             label=t("download_eq"),
             data=dataframe_to_csv_bytes(eq_df),
             file_name=f"{output_prefix}_equivalent_atom_averaged_nmr.csv",
