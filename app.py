@@ -11,7 +11,7 @@ st.set_page_config(page_title="Gaussian NMR Boltzmann Averaging App", layout="wi
 HARTREE_TO_KCAL = 627.509474
 R_KCAL = 0.0019872041  # kcal mol^-1 K^-1
 
-APP_VERSION = "2.3"
+APP_VERSION = "2.4"
 
 DEVELOPER_INFO = {
     "name": "Ken-ichi Nakashima",
@@ -89,8 +89,9 @@ UI_TEXT = {
         "new_mapping": "#### New mapping",
         "selected": "Selected: {items}",
         "none_selected": "No atom is selected yet.",
+        "selected_elements": "Selected element(s): {items}",
         "label_entry": "Label entry",
-        "build_label": "Build H label",
+        "build_label": "Build element label",
         "free_text": "Free text",
         "position_number": "Position number",
         "position_placeholder": "e.g. 3",
@@ -110,15 +111,15 @@ UI_TEXT = {
         "apply_manual": "Apply manual selection",
         "out_of_range": "Out-of-range atom numbers: {atoms}",
         "integer_error": "Enter integers separated by commas.",
-        "registered_mappings": "#### Registered mappings",
-        "no_mappings": "No mappings have been registered.",
-        "not_assigned": "Not assigned",
-        "atoms_label": "Atom(s)",
-        "show_edit": "Show/edit atoms",
-        "delete": "Delete",
+        "label_status_table": "#### Atom label status table",
+        "label_status_desc": "This table helps you check for missing labels across atoms.",
+        "label_status_filter": "Show label status for",
+        "only_unlabeled": "Show only unlabeled atoms",
         "mapping_status": "Mapping status",
         "mapping_labels": "Labels",
         "mapping_registered": "Registered labels",
+        "label_count": "Label count",
+        "assigned_labels": "Assigned labels",
         "eq_avg_header": "7. Equivalent-atom averaged table",
         "download_header": "8. Download outputs",
         "download_per_conf": "Download per-conformer shielding table (CSV)",
@@ -135,6 +136,7 @@ UI_TEXT = {
         "summary_columns_note": "The Boltzmann-averaged table includes weight_<conf_id> columns.",
         "coord_not_found": "No coordinate block could be extracted from valid files, so the structure picker is unavailable.",
         "save_project_desc": "The JSON file stores only labels / equivalent groups, not the Gaussian logs or calculation results.",
+        "mixed_elements_prefix": "Mixed",
     },
     "ja": {
         "title": "Gaussian NMR Boltzmann Averaging App",
@@ -190,8 +192,9 @@ UI_TEXT = {
         "new_mapping": "#### 新しいマッピング",
         "selected": "選択中: {items}",
         "none_selected": "まだ原子が選択されていません。",
+        "selected_elements": "選択元素: {items}",
         "label_entry": "ラベル入力",
-        "build_label": "Hラベルを組み立て",
+        "build_label": "元素ラベルを組み立て",
         "free_text": "自由入力",
         "position_number": "位置番号",
         "position_placeholder": "例: 3",
@@ -211,15 +214,15 @@ UI_TEXT = {
         "apply_manual": "手動選択を適用",
         "out_of_range": "範囲外の原子番号: {atoms}",
         "integer_error": "整数をカンマ区切りで入力してください。",
-        "registered_mappings": "#### 登録済みマッピング",
-        "no_mappings": "まだマッピングは登録されていません。",
-        "not_assigned": "未割り当て",
-        "atoms_label": "原子",
-        "show_edit": "原子を表示/編集",
-        "delete": "削除",
+        "label_status_table": "#### 原子ラベル状況テーブル",
+        "label_status_desc": "全原子に対するラベル漏れ確認用のテーブルです。",
+        "label_status_filter": "ラベル状況を表示する対象",
+        "only_unlabeled": "未ラベル原子のみ表示",
         "mapping_status": "マッピング状況",
         "mapping_labels": "ラベル",
         "mapping_registered": "登録数",
+        "label_count": "ラベル数",
+        "assigned_labels": "割り当てラベル",
         "eq_avg_header": "7. Equivalent atom 平均テーブル",
         "download_header": "8. 出力ファイルのダウンロード",
         "download_per_conf": "各配座 shielding テーブル (CSV) をダウンロード",
@@ -236,6 +239,7 @@ UI_TEXT = {
         "summary_columns_note": "Boltzmann 平均テーブルには weight_<conf_id> 列を含みます。",
         "coord_not_found": "有効ファイルから座標ブロックを抽出できなかったため、構造ピッカーは使用できません。",
         "save_project_desc": "JSON ファイルにはラベル / equivalent group の情報のみを保存し、Gaussian ログや計算結果は保存しません。",
+        "mixed_elements_prefix": "Mixed",
     },
 }
 
@@ -265,6 +269,8 @@ if "atom_mappings" not in st.session_state:
     st.session_state["atom_mappings"] = []
 if "mapping_selection" not in st.session_state:
     st.session_state["mapping_selection"] = []
+if "picker_nonce" not in st.session_state:
+    st.session_state["picker_nonce"] = 0
 if "settings_loaded_once" not in st.session_state:
     st.session_state["settings_loaded_once"] = False
 
@@ -617,6 +623,48 @@ def load_settings_json(uploaded_file):
     return normalized
 
 
+def get_selected_elements(atom_df, atom_numbers):
+    if atom_df.empty or not atom_numbers:
+        return []
+    sub = atom_df[atom_df["atom_index"].isin(atom_numbers)].copy()
+    if sub.empty:
+        return []
+    return sorted(sub["element"].dropna().astype(str).unique().tolist())
+
+
+def get_build_label_prefix(atom_df, atom_numbers):
+    elements = get_selected_elements(atom_df, atom_numbers)
+    if len(elements) == 1:
+        return elements[0]
+    if len(elements) > 1:
+        return t("mixed_elements_prefix")
+    return ""
+
+
+def bump_picker_nonce():
+    st.session_state["picker_nonce"] = int(st.session_state.get("picker_nonce", 0)) + 1
+
+
+def build_atom_label_status_table(atom_df, mappings):
+    out = atom_df.copy()
+    label_map = {int(row["atom_index"]): [] for _, row in out.iterrows()}
+
+    for item in mappings:
+        label = item.get("label", "")
+        for atom_number in item.get("atom_numbers", []):
+            atom_number = int(atom_number)
+            if atom_number in label_map and label:
+                label_map[atom_number].append(label)
+
+    out["assigned_labels"] = out["atom_index"].map(
+        lambda x: ", ".join(label_map.get(int(x), []))
+    )
+    out["label_count"] = out["atom_index"].map(
+        lambda x: len(label_map.get(int(x), []))
+    )
+    return out
+
+
 with st.sidebar:
     selected_language = st.selectbox(
         "Language / 言語",
@@ -902,12 +950,13 @@ if atom_df_ui.empty:
     st.info(t("coord_not_found"))
 else:
     st.markdown(f"**{t('click_atoms')}**")
+    picker_key = f"nmr_atom_picker_{st.session_state['picker_nonce']}"
     picked_atoms = atom_picker(
         atom_df_ui["element"].tolist(),
         st.session_state["latest_xyz"],
         selected_atoms=st.session_state.get("mapping_selection", []),
         language=current_language(),
-        key="nmr_atom_picker",
+        key=picker_key,
     )
     st.session_state["mapping_selection"] = picked_atoms
     current_selection = picked_atoms
@@ -922,6 +971,10 @@ else:
             if number in atom_df_ui["atom_index"].tolist()
         ]
         st.success(t("selected", items=", ".join(selected_details)))
+
+        selected_elements = get_selected_elements(atom_df_ui, current_selection)
+        if selected_elements:
+            st.caption(t("selected_elements", items=", ".join(selected_elements)))
     else:
         st.info(t("none_selected"))
 
@@ -933,6 +986,7 @@ else:
     )
 
     if label_mode == t("build_label"):
+        prefix = get_build_label_prefix(atom_df_ui, current_selection)
         label_col1, label_col2 = st.columns([1.2, 1.0])
         position = label_col1.text_input(
             t("position_number"),
@@ -945,7 +999,7 @@ else:
             ["", "′", "″", "‴"],
             key="nmr_prime",
         )
-        proposed_label = f"H-{position}{prime}" if position else ""
+        proposed_label = f"{prefix}-{position}{prime}" if (prefix and position) else ""
         if proposed_label:
             st.markdown(t("display_label", label=proposed_label))
     else:
@@ -971,6 +1025,7 @@ else:
 
     if clear_selection:
         st.session_state["mapping_selection"] = []
+        bump_picker_nonce()
         st.rerun()
 
     if save_mapping:
@@ -998,6 +1053,7 @@ else:
                 existing["atom_indices"] = atom_indices
                 st.success(t("updated", label=proposed_label))
             st.session_state["mapping_selection"] = []
+            bump_picker_nonce()
             st.rerun()
 
     with st.expander(t("manual_fallback")):
@@ -1019,34 +1075,59 @@ else:
                     st.error(t("out_of_range", atoms=", ".join(map(str, invalid))))
                 else:
                     st.session_state["mapping_selection"] = manual_numbers
+                    bump_picker_nonce()
                     st.rerun()
             except ValueError:
                 st.error(t("integer_error"))
 
-    st.markdown(t("registered_mappings"))
-    if not st.session_state["atom_mappings"]:
-        st.info(t("no_mappings"))
-    else:
-        for idx, item in enumerate(list(st.session_state["atom_mappings"])):
-            with st.container(border=True):
-                info_col, select_col, delete_col = st.columns([4.5, 1.5, 1.0])
-                atom_numbers = [int(n) for n in item.get("atom_numbers", [])]
-                atom_text = ", ".join(str(n) for n in atom_numbers) if atom_numbers else t("not_assigned")
-                info_col.markdown(f'**{item["label"]}**  \n{t("atoms_label")}: {atom_text}')
-                if select_col.button(
-                    t("show_edit"),
-                    key=f"show_mapping_{idx}",
-                    use_container_width=True,
-                ):
-                    st.session_state["mapping_selection"] = list(item["atom_numbers"])
-                    st.rerun()
-                if delete_col.button(
-                    t("delete"),
-                    key=f"delete_mapping_{idx}",
-                    use_container_width=True,
-                ):
-                    st.session_state["atom_mappings"].pop(idx)
-                    st.rerun()
+    st.markdown(t("label_status_table"))
+    st.caption(t("label_status_desc"))
+
+    status_filter = st.multiselect(
+        t("label_status_filter"),
+        options=[t("h"), t("c"), t("other")],
+        default=[t("h"), t("c"), t("other")],
+        key="mapping_status_filter",
+    )
+    only_unlabeled = st.checkbox(
+        t("only_unlabeled"),
+        value=False,
+        key="mapping_only_unlabeled",
+    )
+
+    label_status_df = build_atom_label_status_table(atom_df_ui, st.session_state["atom_mappings"])
+
+    allowed_elements = []
+    if t("h") in status_filter:
+        allowed_elements.append("H")
+    if t("c") in status_filter:
+        allowed_elements.append("C")
+    if t("other") in status_filter:
+        label_status_df = label_status_df[
+            label_status_df["element"].isin(["H", "C"]) | ~label_status_df["element"].isin(["H", "C"])
+        ]
+
+    if status_filter:
+        keep_mask = pd.Series(False, index=label_status_df.index)
+        if t("h") in status_filter:
+            keep_mask = keep_mask | (label_status_df["element"] == "H")
+        if t("c") in status_filter:
+            keep_mask = keep_mask | (label_status_df["element"] == "C")
+        if t("other") in status_filter:
+            keep_mask = keep_mask | (~label_status_df["element"].isin(["H", "C"]))
+        label_status_df = label_status_df[keep_mask].copy()
+
+    if only_unlabeled:
+        label_status_df = label_status_df[label_status_df["label_count"] == 0].copy()
+
+    label_status_df = label_status_df.rename(
+        columns={
+            "label_count": t("label_count"),
+            "assigned_labels": t("assigned_labels"),
+        }
+    )
+
+    st.dataframe(label_status_df, use_container_width=True)
 
     st.markdown(f"**{t('settings_io_header')}**")
     st.caption(t("save_project_desc"))
@@ -1073,6 +1154,8 @@ else:
                 mappings_loaded = load_settings_json(settings_file_inside)
                 st.session_state["atom_mappings"] = mappings_loaded
                 st.session_state["settings_loaded_once"] = True
+                st.session_state["mapping_selection"] = []
+                bump_picker_nonce()
                 st.success(t("settings_loaded"))
                 st.rerun()
             except Exception:
@@ -1084,6 +1167,7 @@ else:
         if st.button(t("clear_mappings"), key="clear_mappings_inside"):
             st.session_state["atom_mappings"] = []
             st.session_state["mapping_selection"] = []
+            bump_picker_nonce()
             st.rerun()
 
     with st.expander(t("mapping_status"), expanded=False):
