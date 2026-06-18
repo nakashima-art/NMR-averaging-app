@@ -16,7 +16,7 @@ APP_VERSION = "2.2"
 DEVELOPER_INFO = {
     "name": "Ken-ichi Nakashima",
     "affiliation_ja": "愛知学院大学 薬学部 薬用資源学講座",
-    "affiliation_en": "Aichi-Gakuin University, School of Pharmacy, Laboratory of Natural Resources",
+    "affiliation_en": "Aichi-Gakuin University\nSchool of Pharmacy\nLaboratory of Natural Resources",
 }
 
 _COMPONENT_DIR = Path(__file__).parent / "atom_picker_component"
@@ -228,7 +228,7 @@ UI_TEXT = {
         "download_avg": "原子ごとの Boltzmann 平均テーブル (CSV) をダウンロード",
         "download_weights": "エネルギー / 存在比テーブル (CSV) をダウンロード",
         "download_eq": "Equivalent atom 平均テーブル (CSV) をダウンロード",
-        "settings_io_header": "設定の保存 / 読み込み",
+        "settings_io_header": "Settings save / load",
         "download_settings": "マッピング設定 (JSON) をダウンロード",
         "upload_settings": "マッピング設定 (JSON) をアップロード",
         "settings_loaded": "設定ファイルを正常に読み込みました。",
@@ -633,11 +633,20 @@ st.write(t("description"))
 
 st.sidebar.header(t("settings"))
 with st.sidebar.expander(t("developer_info"), expanded=False):
-    st.sidebar.write(f'**{t("developer_name")}**: {DEVELOPER_INFO["name"]}')
     if current_language() == "ja":
-        st.sidebar.write(f'**{t("developer_affiliation")}**: {DEVELOPER_INFO["affiliation_ja"]}')
+        affiliation_text = DEVELOPER_INFO["affiliation_ja"]
     else:
-        st.sidebar.write(f'**{t("developer_affiliation")}**: {DEVELOPER_INFO["affiliation_en"]}')
+        affiliation_text = DEVELOPER_INFO["affiliation_en"]
+
+    st.markdown(
+        f"""
+**{t("developer_name")}**  
+{DEVELOPER_INFO["name"]}
+
+**{t("developer_affiliation")}**  
+{affiliation_text}
+"""
+    )
 
 temperature = st.sidebar.number_input(t("temperature"), value=298.15, step=1.0)
 
@@ -738,43 +747,6 @@ output_prefix = build_output_prefix_from_giao(giao_files)
 
 if giao_files:
     st.caption(t("filename_prefix_info"))
-
-st.subheader(t("settings_io_header"))
-st.caption(t("save_project_desc"))
-col_set1, col_set2, col_set3 = st.columns([2, 2, 1])
-
-with col_set1:
-    st.download_button(
-        label=t("download_settings"),
-        data=make_settings_json_bytes(),
-        file_name=f"{output_prefix}_nmr_mapping_settings.json",
-        mime="application/json",
-    )
-
-with col_set2:
-    settings_file = st.file_uploader(
-        t("upload_settings"),
-        type=["json"],
-        accept_multiple_files=False,
-        key="settings_json",
-    )
-    if settings_file is not None and not st.session_state["settings_loaded_once"]:
-        try:
-            mappings_loaded = load_settings_json(settings_file)
-            st.session_state["atom_mappings"] = mappings_loaded
-            st.session_state["settings_loaded_once"] = True
-            st.success(t("settings_loaded"))
-            st.rerun()
-        except Exception:
-            st.error(t("settings_load_error"))
-    if settings_file is None:
-        st.session_state["settings_loaded_once"] = False
-
-with col_set3:
-    if st.button(t("clear_mappings")):
-        st.session_state["atom_mappings"] = []
-        st.session_state["mapping_selection"] = []
-        st.rerun()
 
 if opt_files and giao_files:
     opt_records = []
@@ -931,140 +903,134 @@ atom_df_ui = st.session_state["latest_atom_table"].copy()
 if atom_df_ui.empty:
     st.info(t("coord_not_found"))
 else:
-    current_selection = st.session_state.get("mapping_selection", [])
+    st.markdown(f"**{t('click_atoms')}**")
+    picked_atoms = atom_picker(
+        atom_df_ui["element"].tolist(),
+        st.session_state["latest_xyz"],
+        selected_atoms=st.session_state.get("mapping_selection", []),
+        language=current_language(),
+        key="nmr_atom_picker",
+    )
+    st.session_state["mapping_selection"] = picked_atoms
+    current_selection = picked_atoms
+    st.caption(t("viewer_caption"))
 
-    left, right = st.columns([1.55, 1.0], gap="large")
+    st.markdown(f"**{t('new_mapping')}**")
 
-    with left:
-        st.markdown(t("click_atoms"))
-        picked_atoms = atom_picker(
-            atom_df_ui["element"].tolist(),
-            st.session_state["latest_xyz"],
-            selected_atoms=current_selection,
-            language=current_language(),
-            key="nmr_atom_picker",
+    if current_selection:
+        selected_details = [
+            f'{atom_df_ui.loc[atom_df_ui["atom_index"] == number, "element"].iloc[0]} {number}'
+            for number in current_selection
+            if number in atom_df_ui["atom_index"].tolist()
+        ]
+        st.success(t("selected", items=", ".join(selected_details)))
+    else:
+        st.info(t("none_selected"))
+
+    label_mode = st.radio(
+        t("label_entry"),
+        [t("build_label"), t("free_text")],
+        horizontal=True,
+        key="nmr_label_mode",
+    )
+
+    if label_mode == t("build_label"):
+        label_col1, label_col2 = st.columns([1.2, 1.0])
+        position = label_col1.text_input(
+            t("position_number"),
+            value="",
+            placeholder=t("position_placeholder"),
+            key="nmr_position",
+        ).strip()
+        prime = label_col2.selectbox(
+            t("prime"),
+            ["", "′", "″", "‴"],
+            key="nmr_prime",
         )
-        st.session_state["mapping_selection"] = picked_atoms
-        current_selection = picked_atoms
-        st.caption(t("viewer_caption"))
+        proposed_label = f"H-{position}{prime}" if position else ""
+        if proposed_label:
+            st.markdown(t("display_label", label=proposed_label))
+    else:
+        proposed_label = st.text_input(
+            t("label"),
+            value="",
+            placeholder=t("label_placeholder"),
+            key="nmr_custom_label",
+        ).strip()
 
-    with right:
-        st.markdown(t("new_mapping"))
+    button_col1, button_col2 = st.columns(2)
+    save_mapping = button_col1.button(
+        t("save_mapping"),
+        type="primary",
+        use_container_width=True,
+        key="nmr_save_mapping",
+    )
+    clear_selection = button_col2.button(
+        t("clear_selection"),
+        use_container_width=True,
+        key="nmr_clear_selection",
+    )
 
-        if current_selection:
-            selected_details = [
-                f'{atom_df_ui.loc[atom_df_ui["atom_index"] == number, "element"].iloc[0]} {number}'
-                for number in current_selection
-                if number in atom_df_ui["atom_index"].tolist()
+    if clear_selection:
+        st.session_state["mapping_selection"] = []
+        st.rerun()
+
+    if save_mapping:
+        if not proposed_label:
+            st.error(t("enter_label"))
+        elif not current_selection:
+            st.error(t("select_atom"))
+        else:
+            non_h = [
+                n for n in current_selection
+                if atom_df_ui.loc[atom_df_ui["atom_index"] == n, "element"].iloc[0] != "H"
             ]
-            st.success(t("selected", items=", ".join(selected_details)))
-        else:
-            st.info(t("none_selected"))
-
-        label_mode = st.radio(
-            t("label_entry"),
-            [t("build_label"), t("free_text")],
-            horizontal=True,
-            key="nmr_label_mode",
-        )
-
-        if label_mode == t("build_label"):
-            label_col1, label_col2 = st.columns([1.2, 1.0])
-            position = label_col1.text_input(
-                t("position_number"),
-                value="",
-                placeholder=t("position_placeholder"),
-                key="nmr_position",
-            ).strip()
-            prime = label_col2.selectbox(
-                t("prime"),
-                ["", "′", "″", "‴"],
-                key="nmr_prime",
-            )
-            proposed_label = f"H-{position}{prime}" if position else ""
-            if proposed_label:
-                st.markdown(t("display_label", label=proposed_label))
-        else:
-            proposed_label = st.text_input(
-                t("label"),
-                value="",
-                placeholder=t("label_placeholder"),
-                key="nmr_custom_label",
-            ).strip()
-
-        button_col1, button_col2 = st.columns(2)
-        save_mapping = button_col1.button(
-            t("save_mapping"),
-            type="primary",
-            use_container_width=True,
-            key="nmr_save_mapping",
-        )
-        clear_selection = button_col2.button(
-            t("clear_selection"),
-            use_container_width=True,
-            key="nmr_clear_selection",
-        )
-
-        if clear_selection:
-            st.session_state["mapping_selection"] = []
-            st.rerun()
-
-        if save_mapping:
-            if not proposed_label:
-                st.error(t("enter_label"))
-            elif not current_selection:
-                st.error(t("select_atom"))
+            if non_h:
+                st.error(t("non_hydrogen", atoms=", ".join(map(str, non_h))))
             else:
-                non_h = [
-                    n for n in current_selection
-                    if atom_df_ui.loc[atom_df_ui["atom_index"] == n, "element"].iloc[0] != "H"
-                ]
-                if non_h:
-                    st.error(t("non_hydrogen", atoms=", ".join(map(str, non_h))))
-                else:
-                    atom_indices = [atom_index_from_user_number(n) for n in current_selection]
-                    existing = next(
-                        (item for item in st.session_state["atom_mappings"] if item["label"] == proposed_label),
-                        None,
+                atom_indices = [atom_index_from_user_number(n) for n in current_selection]
+                existing = next(
+                    (item for item in st.session_state["atom_mappings"] if item["label"] == proposed_label),
+                    None,
+                )
+                if existing is None:
+                    st.session_state["atom_mappings"].append(
+                        {
+                            "label": proposed_label,
+                            "atom_numbers": list(current_selection),
+                            "atom_indices": atom_indices,
+                        }
                     )
-                    if existing is None:
-                        st.session_state["atom_mappings"].append(
-                            {
-                                "label": proposed_label,
-                                "atom_numbers": list(current_selection),
-                                "atom_indices": atom_indices,
-                            }
-                        )
-                        st.success(t("added", label=proposed_label))
-                    else:
-                        existing["atom_numbers"] = list(current_selection)
-                        existing["atom_indices"] = atom_indices
-                        st.success(t("updated", label=proposed_label))
-                    st.session_state["mapping_selection"] = []
-                    st.rerun()
+                    st.success(t("added", label=proposed_label))
+                else:
+                    existing["atom_numbers"] = list(current_selection)
+                    existing["atom_indices"] = atom_indices
+                    st.success(t("updated", label=proposed_label))
+                st.session_state["mapping_selection"] = []
+                st.rerun()
 
-        with st.expander(t("manual_fallback")):
-            st.caption(t("manual_desc"))
-            manual_raw = st.text_input(
-                t("manual_numbers"),
-                value=",".join(map(str, current_selection)),
-                key="nmr_manual_selection",
-            )
-            if st.button(t("apply_manual"), key="nmr_apply_manual"):
-                try:
-                    manual_numbers = sorted({
-                        int(x.strip())
-                        for x in manual_raw.split(",")
-                        if x.strip()
-                    })
-                    invalid = [n for n in manual_numbers if n < 1 or n > len(atom_df_ui)]
-                    if invalid:
-                        st.error(t("out_of_range", atoms=", ".join(map(str, invalid))))
-                    else:
-                        st.session_state["mapping_selection"] = manual_numbers
-                        st.rerun()
-                except ValueError:
-                    st.error(t("integer_error"))
+    with st.expander(t("manual_fallback")):
+        st.caption(t("manual_desc"))
+        manual_raw = st.text_input(
+            t("manual_numbers"),
+            value=",".join(map(str, current_selection)),
+            key="nmr_manual_selection",
+        )
+        if st.button(t("apply_manual"), key="nmr_apply_manual"):
+            try:
+                manual_numbers = sorted({
+                    int(x.strip())
+                    for x in manual_raw.split(",")
+                    if x.strip()
+                })
+                invalid = [n for n in manual_numbers if n < 1 or n > len(atom_df_ui)]
+                if invalid:
+                    st.error(t("out_of_range", atoms=", ".join(map(str, invalid))))
+                else:
+                    st.session_state["mapping_selection"] = manual_numbers
+                    st.rerun()
+            except ValueError:
+                st.error(t("integer_error"))
 
     st.markdown(t("registered_mappings"))
     if not st.session_state["atom_mappings"]:
@@ -1090,6 +1056,44 @@ else:
                 ):
                     st.session_state["atom_mappings"].pop(idx)
                     st.rerun()
+
+    st.markdown(f"**{t('settings_io_header')}**")
+    st.caption(t("save_project_desc"))
+    map_col1, map_col2, map_col3 = st.columns([2, 2, 1])
+
+    with map_col1:
+        st.download_button(
+            label=t("download_settings"),
+            data=make_settings_json_bytes(),
+            file_name=f"{output_prefix}_nmr_mapping_settings.json",
+            mime="application/json",
+            key="download_mapping_settings_inside",
+        )
+
+    with map_col2:
+        settings_file_inside = st.file_uploader(
+            t("upload_settings"),
+            type=["json"],
+            accept_multiple_files=False,
+            key="settings_json_inside_mapping",
+        )
+        if settings_file_inside is not None and not st.session_state["settings_loaded_once"]:
+            try:
+                mappings_loaded = load_settings_json(settings_file_inside)
+                st.session_state["atom_mappings"] = mappings_loaded
+                st.session_state["settings_loaded_once"] = True
+                st.success(t("settings_loaded"))
+                st.rerun()
+            except Exception:
+                st.error(t("settings_load_error"))
+        if settings_file_inside is None:
+            st.session_state["settings_loaded_once"] = False
+
+    with map_col3:
+        if st.button(t("clear_mappings"), key="clear_mappings_inside"):
+            st.session_state["atom_mappings"] = []
+            st.session_state["mapping_selection"] = []
+            st.rerun()
 
     with st.expander(t("mapping_status"), expanded=False):
         status_df = pd.DataFrame([
