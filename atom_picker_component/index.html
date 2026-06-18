@@ -51,6 +51,15 @@
       cursor: pointer;
       user-select: none;
     }
+    .toolbar-group {
+      display: inline-flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .toolbar-sep {
+      opacity: 0.4;
+    }
     #selection-text {
       margin-left: auto;
       opacity: 0.8;
@@ -59,12 +68,20 @@
 </head>
 <body>
   <div id="toolbar">
-    <label><input id="show-h" type="checkbox" checked /> <span id="show-h-text">H numbers</span></label>
-    <label><input id="show-all" type="checkbox" /> <span id="show-all-text">All atom numbers</span></label>
-    <label><input id="hydrogen-only" type="checkbox" /> <span id="hydrogen-only-text">H only</span></label>
     <label><input id="hide-h" type="checkbox" /> <span id="hide-h-text">Hide H</span></label>
+
+    <span class="toolbar-sep">/</span>
+
+    <div class="toolbar-group">
+      <span id="atom-number-mode-text">Atom numbers</span>
+      <label><input id="show-all" type="checkbox" /> <span id="show-all-text">All atoms</span></label>
+      <label><input id="show-h" type="checkbox" checked /> <span id="show-h-text">H only</span></label>
+      <label><input id="show-c" type="checkbox" /> <span id="show-c-text">C only</span></label>
+    </div>
+
     <span id="selection-text">Selected: none</span>
   </div>
+
   <div id="viewer"><div id="status">Loading 3D viewer…</div></div>
 
   <script>
@@ -125,10 +142,11 @@
 
     const UI = {
       en: {
-        hNumbers: "H numbers",
-        allNumbers: "All atom numbers",
-        hOnly: "H only",
         hideH: "Hide H",
+        atomNumbers: "Atom numbers",
+        allAtoms: "All atoms",
+        hOnly: "H only",
+        cOnly: "C only",
         selected: "Selected",
         none: "none",
         loading: "Loading 3D viewer…",
@@ -136,10 +154,11 @@
         loadError: "The 3Dmol.js viewer could not be loaded. Check whether external CDN access is blocked by the browser or deployment network."
       },
       ja: {
-        hNumbers: "水素原子番号",
-        allNumbers: "全原子番号",
+        hideH: "水素を非表示",
+        atomNumbers: "原子番号",
+        allAtoms: "全原子",
         hOnly: "水素のみ",
-        hideH: "Hを非表示",
+        cOnly: "炭素のみ",
         selected: "選択中",
         none: "なし",
         loading: "3Dビューアを読み込み中…",
@@ -153,10 +172,11 @@
     }
 
     function updateUIStrings() {
-      document.getElementById("show-h-text").textContent = ui().hNumbers;
-      document.getElementById("show-all-text").textContent = ui().allNumbers;
-      document.getElementById("hydrogen-only-text").textContent = ui().hOnly;
       document.getElementById("hide-h-text").textContent = ui().hideH;
+      document.getElementById("atom-number-mode-text").textContent = ui().atomNumbers;
+      document.getElementById("show-all-text").textContent = ui().allAtoms;
+      document.getElementById("show-h-text").textContent = ui().hOnly;
+      document.getElementById("show-c-text").textContent = ui().cOnly;
       updateSelectionText();
     }
 
@@ -214,6 +234,17 @@
       return null;
     }
 
+    function getLabelMode() {
+      const showAll = document.getElementById("show-all").checked;
+      const showH = document.getElementById("show-h").checked;
+      const showC = document.getElementById("show-c").checked;
+
+      if (showAll) return "all";
+      if (showC) return "c";
+      if (showH) return "h";
+      return "none";
+    }
+
     function applyStylesAndLabels() {
       if (!viewer || !model) return;
 
@@ -223,16 +254,8 @@
         sphere: { scale: 0.25 }
       });
 
-      const hydrogenOnly = document.getElementById("hydrogen-only").checked;
       const hideHydrogen = document.getElementById("hide-h").checked;
-
-      if (hydrogenOnly) {
-        viewer.setStyle({ elem: "H" }, {
-          stick: { radius: 0.10 },
-          sphere: { scale: 0.30 }
-        });
-        viewer.setStyle({ not: { elem: "H" } }, { hidden: true });
-      } else if (hideHydrogen) {
+      if (hideHydrogen) {
         viewer.setStyle({ elem: "H" }, { hidden: true });
       }
 
@@ -243,13 +266,17 @@
         });
       }
 
-      const showH = document.getElementById("show-h").checked;
-      const showAll = document.getElementById("show-all").checked;
+      const labelMode = getLabelMode();
       const atoms = model.selectedAtoms({});
       atoms.forEach(atom => {
         const number = atomNumber(atom);
         if (!number) return;
-        const shouldLabel = showAll || (showH && atom.elem === "H");
+
+        let shouldLabel = false;
+        if (labelMode === "all") shouldLabel = true;
+        else if (labelMode === "h" && atom.elem === "H") shouldLabel = true;
+        else if (labelMode === "c" && atom.elem === "C") shouldLabel = true;
+
         if (shouldLabel) {
           viewer.addLabel(String(number), {
             position: { x: atom.x, y: atom.y, z: atom.z },
@@ -262,6 +289,14 @@
 
       updateSelectionText();
       viewer.render();
+    }
+
+    function setExclusiveCheckbox(activeId) {
+      ["show-all", "show-h", "show-c"].forEach(id => {
+        if (id !== activeId) {
+          document.getElementById(id).checked = false;
+        }
+      });
     }
 
     function buildViewer(xyz) {
@@ -320,9 +355,22 @@
       renderArgs(event.detail.args || {});
     }
 
-    ["show-h", "show-all", "hydrogen-only", "hide-h"].forEach(id => {
-      document.getElementById(id).addEventListener("change", applyStylesAndLabels);
+    document.getElementById("show-all").addEventListener("change", (e) => {
+      if (e.target.checked) setExclusiveCheckbox("show-all");
+      applyStylesAndLabels();
     });
+
+    document.getElementById("show-h").addEventListener("change", (e) => {
+      if (e.target.checked) setExclusiveCheckbox("show-h");
+      applyStylesAndLabels();
+    });
+
+    document.getElementById("show-c").addEventListener("change", (e) => {
+      if (e.target.checked) setExclusiveCheckbox("show-c");
+      applyStylesAndLabels();
+    });
+
+    document.getElementById("hide-h").addEventListener("change", applyStylesAndLabels);
 
     Streamlit.events.addEventListener(Streamlit.RENDER_EVENT, onRender);
     Streamlit.setComponentReady();
