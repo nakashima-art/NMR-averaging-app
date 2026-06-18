@@ -10,9 +10,8 @@ st.set_page_config(page_title="Gaussian NMR Boltzmann Averaging App", layout="wi
 
 HARTREE_TO_KCAL = 627.509474
 R_KCAL = 0.0019872041  # kcal mol^-1 K^-1
-BOHR_TO_ANG = 0.529177210903
 
-APP_VERSION = "2.1"
+APP_VERSION = "2.2"
 
 DEVELOPER_INFO = {
     "name": "Ken-ichi Nakashima",
@@ -20,9 +19,10 @@ DEVELOPER_INFO = {
     "affiliation_en": "Aichi-Gakuin University, School of Pharmacy, Laboratory of Natural Resources",
 }
 
-ATOM_PICKER = components.declare_component(
+_COMPONENT_DIR = Path(__file__).parent / "atom_picker_component"
+atom_picker_component = components.declare_component(
     "atom_picker_component",
-    path="atom_picker_component",
+    path=str(_COMPONENT_DIR),
 )
 
 ATOMIC_NUMBER_TO_SYMBOL = {
@@ -31,13 +31,7 @@ ATOMIC_NUMBER_TO_SYMBOL = {
     11: "Na", 12: "Mg", 13: "Al", 14: "Si", 15: "P", 16: "S", 17: "Cl", 18: "Ar",
     19: "K", 20: "Ca", 21: "Sc", 22: "Ti", 23: "V", 24: "Cr", 25: "Mn", 26: "Fe",
     27: "Co", 28: "Ni", 29: "Cu", 30: "Zn", 31: "Ga", 32: "Ge", 33: "As", 34: "Se",
-    35: "Br", 36: "Kr", 37: "Rb", 38: "Sr", 39: "Y", 40: "Zr", 41: "Nb", 42: "Mo",
-    43: "Tc", 44: "Ru", 45: "Rh", 46: "Pd", 47: "Ag", 48: "Cd", 49: "In", 50: "Sn",
-    51: "Sb", 52: "Te", 53: "I", 54: "Xe", 55: "Cs", 56: "Ba", 57: "La", 58: "Ce",
-    59: "Pr", 60: "Nd", 61: "Pm", 62: "Sm", 63: "Eu", 64: "Gd", 65: "Tb", 66: "Dy",
-    67: "Ho", 68: "Er", 69: "Tm", 70: "Yb", 71: "Lu", 72: "Hf", 73: "Ta", 74: "W",
-    75: "Re", 76: "Os", 77: "Ir", 78: "Pt", 79: "Au", 80: "Hg", 81: "Tl", 82: "Pb",
-    83: "Bi", 84: "Po", 85: "At", 86: "Rn",
+    35: "Br", 36: "Kr", 53: "I",
 }
 
 UI_TEXT = {
@@ -88,25 +82,44 @@ UI_TEXT = {
         "weights_header": "3. Energies and Boltzmann weights",
         "shielding_header": "4. Isotropic shielding table for each conformer",
         "avg_header": "5. Per-atom Boltzmann-averaged shielding / shift table",
-        "eq_header": "6. Equivalent atom groups",
-        "atom_label_header": "Atom label assignment",
-        "atom_label_help": "Assign labels to atom indices from the first valid coordinate set. These labels can be used when creating equivalent atom groups.",
-        "atom_table_empty": "After valid files are uploaded, the atom list will appear here.",
-        "available_atoms": "Available atoms",
-        "filter_atoms_group": "Filter atoms for group selection",
-        "group_label": "Group label",
-        "select_atom_indices": "Select equivalent atom indices",
-        "select_atom_labels": "Select equivalent atom labels",
-        "group_input_mode": "Group input mode",
-        "group_by_structure": "Structure picker",
-        "group_by_indices": "Atom indices",
-        "group_by_labels": "Atom labels",
-        "already_registered": "These atom indices are already included in existing groups",
-        "add_group": "Add equivalent atom group",
-        "enter_group_label": "Please enter a group label.",
-        "select_one_atom": "Please select at least one atom.",
-        "registered_groups": "Registered equivalent atom groups",
+        "mapping_header": "6. Atom mapping",
+        "mapping_desc": "Click one or more atoms in the 3D structure, assign a proton label, and save the mapping. Multiple selected atoms are treated as an interchangeable group.",
+        "click_atoms": "#### Click atoms in the 3D structure",
+        "viewer_caption": "Hydrogen atom numbers are shown by default. Use the checkboxes above the viewer to display all atom numbers or to show hydrogens only.",
+        "new_mapping": "#### New proton mapping",
+        "selected": "Selected: {items}",
+        "none_selected": "No atom is selected yet.",
+        "label_entry": "Label entry",
+        "build_label": "Build H label",
+        "free_text": "Free text",
+        "position_number": "Position number",
+        "position_placeholder": "e.g. 3",
+        "prime": "Prime",
+        "display_label": "Display label: **{label}**",
+        "label": "Label",
+        "label_placeholder": "e.g. H-2′ / H-6′",
+        "save_mapping": "Save mapping",
+        "clear_selection": "Clear selection",
+        "enter_label": "Enter a proton label.",
+        "select_atom": "Select at least one atom in the 3D structure.",
+        "non_hydrogen": "The following selected atoms are not hydrogen atoms: {atoms}",
+        "added": "Added {label}.",
+        "updated": "Updated {label}.",
+        "manual_fallback": "Manual selection fallback",
+        "manual_desc": "Use this only when clicking the 3D structure is difficult.",
+        "manual_numbers": "1-based atom numbers, separated by commas",
+        "apply_manual": "Apply manual selection",
+        "out_of_range": "Out-of-range atom numbers: {atoms}",
+        "integer_error": "Enter integers separated by commas.",
+        "registered_mappings": "#### Registered mappings",
+        "no_mappings": "No mappings have been registered.",
+        "not_assigned": "Not assigned",
+        "atoms_label": "Atom(s)",
+        "show_edit": "Show/edit atoms",
         "delete": "Delete",
+        "mapping_status": "Mapping status",
+        "mapping_labels": "Labels",
+        "mapping_registered": "Registered labels",
         "eq_avg_header": "7. Equivalent-atom averaged table",
         "download_header": "8. Download outputs",
         "download_per_conf": "Download per-conformer shielding table (CSV)",
@@ -114,24 +127,15 @@ UI_TEXT = {
         "download_weights": "Download energy / weight table (CSV)",
         "download_eq": "Download equivalent-atom averaged table (CSV)",
         "settings_io_header": "Settings save / load",
-        "download_settings": "Download labels / groups settings (JSON)",
-        "upload_settings": "Upload labels / groups settings (JSON)",
+        "download_settings": "Download mapping settings (JSON)",
+        "upload_settings": "Upload mapping settings (JSON)",
         "settings_loaded": "Settings file loaded successfully.",
         "settings_load_error": "Failed to load settings JSON.",
-        "clear_groups": "Clear equivalent atom groups",
-        "clear_labels": "Clear atom labels",
-        "atom_label_column": "atom_label",
-        "atom_label_input": "Label",
-        "apply_labels": "Apply label edits",
-        "labels_updated": "Atom labels were updated.",
+        "clear_mappings": "Clear mappings",
         "filename_prefix_info": "Output filenames use the common prefix of uploaded GIAO files.",
-        "structure_picker_title": "Structure-based atom picker",
-        "structure_picker_help": "Use the 3D viewer to select atoms. The numbering follows the first valid coordinate set and is applied globally.",
-        "selected_atoms_preview": "Selected atoms",
-        "selected_labels_preview": "Selected labels",
-        "expander_show": "Show",
         "summary_columns_note": "The Boltzmann-averaged table includes weight_<conf_id> columns.",
         "coord_not_found": "No coordinate block could be extracted from valid files, so the structure picker is unavailable.",
+        "save_project_desc": "The JSON file stores only proton labels / equivalent groups, not the Gaussian logs or calculation results.",
     },
     "ja": {
         "title": "Gaussian NMR Boltzmann Averaging App",
@@ -180,25 +184,44 @@ UI_TEXT = {
         "weights_header": "3. エネルギーと Boltzmann 存在比",
         "shielding_header": "4. 各配座の isotropic shielding テーブル",
         "avg_header": "5. 原子ごとの Boltzmann 平均 shielding / shift テーブル",
-        "eq_header": "6. Equivalent atom groups",
-        "atom_label_header": "原子ラベル設定",
-        "atom_label_help": "最初の有効な座標セットに対してラベルを付与します。付与したラベルは equivalent atom group の作成に利用できます。",
-        "atom_table_empty": "有効なファイルがアップロードされると、ここに atom list が表示されます。",
-        "available_atoms": "利用可能な原子",
-        "filter_atoms_group": "group 選択用の原子フィルター",
-        "group_label": "グループラベル",
-        "select_atom_indices": "等価原子番号を選択",
-        "select_atom_labels": "等価原子ラベルを選択",
-        "group_input_mode": "グループ入力モード",
-        "group_by_structure": "構造ピッカー",
-        "group_by_indices": "原子番号",
-        "group_by_labels": "原子ラベル",
-        "already_registered": "以下の原子番号は既存グループに含まれています",
-        "add_group": "Equivalent atom group を追加",
-        "enter_group_label": "グループラベルを入力してください。",
-        "select_one_atom": "少なくとも1つ原子を選択してください。",
-        "registered_groups": "登録済み equivalent atom groups",
+        "mapping_header": "6. Atom mapping",
+        "mapping_desc": "3D 構造上で1つ以上の原子を選択し、プロトンラベルを付けて保存します。複数選択した原子は交換可能なグループとして扱います。",
+        "click_atoms": "#### 3D 構造上で原子をクリック",
+        "viewer_caption": "初期状態では水素原子番号が表示されます。上部のチェックボックスで全原子番号表示や水素のみ表示に切り替えられます。",
+        "new_mapping": "#### 新しいプロトンマッピング",
+        "selected": "選択中: {items}",
+        "none_selected": "まだ原子が選択されていません。",
+        "label_entry": "ラベル入力",
+        "build_label": "Hラベルを組み立て",
+        "free_text": "自由入力",
+        "position_number": "位置番号",
+        "position_placeholder": "例: 3",
+        "prime": "Prime",
+        "display_label": "表示ラベル: **{label}**",
+        "label": "ラベル",
+        "label_placeholder": "例: H-2′ / H-6′",
+        "save_mapping": "マッピングを保存",
+        "clear_selection": "選択をクリア",
+        "enter_label": "プロトンラベルを入力してください。",
+        "select_atom": "少なくとも1つ原子を選択してください。",
+        "non_hydrogen": "以下の選択原子は水素ではありません: {atoms}",
+        "added": "{label} を追加しました。",
+        "updated": "{label} を更新しました。",
+        "manual_fallback": "手動選択フォールバック",
+        "manual_desc": "3D 構造上でのクリックが難しい場合にのみ使ってください。",
+        "manual_numbers": "1始まりの原子番号をカンマ区切りで入力",
+        "apply_manual": "手動選択を適用",
+        "out_of_range": "範囲外の原子番号: {atoms}",
+        "integer_error": "整数をカンマ区切りで入力してください。",
+        "registered_mappings": "#### 登録済みマッピング",
+        "no_mappings": "まだマッピングは登録されていません。",
+        "not_assigned": "未割り当て",
+        "atoms_label": "原子",
+        "show_edit": "原子を表示/編集",
         "delete": "削除",
+        "mapping_status": "マッピング状況",
+        "mapping_labels": "ラベル",
+        "mapping_registered": "登録数",
         "eq_avg_header": "7. Equivalent atom 平均テーブル",
         "download_header": "8. 出力ファイルのダウンロード",
         "download_per_conf": "各配座 shielding テーブル (CSV) をダウンロード",
@@ -206,56 +229,74 @@ UI_TEXT = {
         "download_weights": "エネルギー / 存在比テーブル (CSV) をダウンロード",
         "download_eq": "Equivalent atom 平均テーブル (CSV) をダウンロード",
         "settings_io_header": "設定の保存 / 読み込み",
-        "download_settings": "ラベル / groups 設定 (JSON) をダウンロード",
-        "upload_settings": "ラベル / groups 設定 (JSON) をアップロード",
+        "download_settings": "マッピング設定 (JSON) をダウンロード",
+        "upload_settings": "マッピング設定 (JSON) をアップロード",
         "settings_loaded": "設定ファイルを正常に読み込みました。",
         "settings_load_error": "設定 JSON の読み込みに失敗しました。",
-        "clear_groups": "Equivalent atom groups をクリア",
-        "clear_labels": "原子ラベルをクリア",
-        "atom_label_column": "atom_label",
-        "atom_label_input": "ラベル",
-        "apply_labels": "ラベル編集を反映",
-        "labels_updated": "原子ラベルを更新しました。",
+        "clear_mappings": "マッピングをクリア",
         "filename_prefix_info": "出力ファイル名にはアップロードした GIAO ファイルの共通接頭辞を使用します。",
-        "structure_picker_title": "構造ベース原子ピッカー",
-        "structure_picker_help": "3D ビューアで原子を選択します。番号は最初の有効座標セットに基づき、全体に適用されます。",
-        "selected_atoms_preview": "選択原子",
-        "selected_labels_preview": "選択ラベル",
-        "expander_show": "表示",
         "summary_columns_note": "Boltzmann 平均テーブルには weight_<conf_id> 列を含みます。",
         "coord_not_found": "有効ファイルから座標ブロックを抽出できなかったため、構造ピッカーは使用できません。",
+        "save_project_desc": "JSON ファイルにはプロトンラベル / equivalent group の情報のみを保存し、Gaussian ログや計算結果は保存しません。",
     },
 }
 
 
+def current_language():
+    return "ja" if st.session_state.get("ui_language", "English") == "日本語" else "en"
+
+
+def t(key: str, **kwargs):
+    text = UI_TEXT[current_language()].get(key, key)
+    return text.format(**kwargs) if kwargs else text
+
+
 if "ui_language" not in st.session_state:
     st.session_state["ui_language"] = "English"
-if "equivalent_groups_ui" not in st.session_state:
-    st.session_state["equivalent_groups_ui"] = []
-if "latest_atom_table" not in st.session_state:
-    st.session_state["latest_atom_table"] = pd.DataFrame(columns=["atom_index", "element"])
 if "tms_ref_H" not in st.session_state:
     st.session_state["tms_ref_H"] = None
 if "tms_ref_C" not in st.session_state:
     st.session_state["tms_ref_C"] = None
 if "tms_ref_filename" not in st.session_state:
     st.session_state["tms_ref_filename"] = None
-if "atom_label_map" not in st.session_state:
-    st.session_state["atom_label_map"] = {}
-if "settings_loaded_once" not in st.session_state:
-    st.session_state["settings_loaded_once"] = False
-if "picker_selected_atoms" not in st.session_state:
-    st.session_state["picker_selected_atoms"] = []
+if "latest_atom_table" not in st.session_state:
+    st.session_state["latest_atom_table"] = pd.DataFrame(columns=["atom_index", "element"])
 if "latest_xyz" not in st.session_state:
     st.session_state["latest_xyz"] = ""
+if "atom_mappings" not in st.session_state:
+    st.session_state["atom_mappings"] = []
+if "mapping_selection" not in st.session_state:
+    st.session_state["mapping_selection"] = []
+if "settings_loaded_once" not in st.session_state:
+    st.session_state["settings_loaded_once"] = False
 
 
-def get_lang():
-    return "ja" if st.session_state["ui_language"] == "日本語" else "en"
+def atom_picker(atoms, xyz_text, selected_atoms=None, height=520, language="ja", key=None):
+    default_selection = sorted(set(int(x) for x in (selected_atoms or [])))
+    value = atom_picker_component(
+        xyz=xyz_text,
+        selected_atoms=default_selection,
+        height=int(height),
+        language=str(language),
+        key=key,
+        default=default_selection,
+    )
+    if not isinstance(value, list):
+        return default_selection
+
+    cleaned = []
+    for item in value:
+        try:
+            number = int(item)
+            if 1 <= number <= len(atoms):
+                cleaned.append(number)
+        except Exception:
+            pass
+    return sorted(set(cleaned))
 
 
-def T(key):
-    return UI_TEXT[get_lang()][key]
+def read_text(uploaded_file):
+    return uploaded_file.getvalue().decode("utf-8", errors="ignore")
 
 
 def extract_conf_id(filename: str):
@@ -269,10 +310,6 @@ def extract_conf_id(filename: str):
 
     stem = re.sub(r"\.(log|out)$", "", filename, flags=re.IGNORECASE)
     return stem
-
-
-def read_text(uploaded_file):
-    return uploaded_file.getvalue().decode("utf-8", errors="ignore")
 
 
 def check_normal_termination(text: str):
@@ -337,9 +374,7 @@ def extract_last_xyz_from_gaussian(text: str):
             j = start
             while j < len(lines):
                 s = lines[j].strip()
-                if not s:
-                    break
-                if s.startswith("-----"):
+                if not s or s.startswith("-----"):
                     break
 
                 parts = lines[j].split()
@@ -411,10 +446,11 @@ def add_boltzmann_average(per_conf_df, conf_ids, weights):
     out = per_conf_df.copy()
 
     for cid, w in zip(conf_ids, weights):
-        col = f"shielding_{cid}"
+        shielding_col = f"shielding_{cid}"
         weighted_col = f"weighted_{cid}"
         weight_col = f"weight_{cid}"
-        out[weighted_col] = out[col] * w
+
+        out[weighted_col] = out[shielding_col] * w
         out[weight_col] = w
 
     weighted_cols = [f"weighted_{cid}" for cid in conf_ids]
@@ -462,22 +498,19 @@ def shielding_to_shift(
     return out
 
 
-def average_equivalent_atoms(df, groups):
+def average_equivalent_atoms(df, mappings):
     results = []
 
-    value_cols = [
-        c for c in df.columns
-        if c.startswith("shielding_") or c.startswith("weighted_") or c.startswith("weight_")
-    ]
+    value_cols = [c for c in df.columns if c.startswith("shielding_") or c.startswith("weighted_") or c.startswith("weight_")]
     if "shielding_boltzmann" in df.columns:
         value_cols.append("shielding_boltzmann")
     if "chemical_shift" in df.columns:
         value_cols.append("chemical_shift")
     value_cols = list(dict.fromkeys(value_cols))
 
-    for group in groups:
-        atoms = group["atoms"]
-        sub = df[df["atom_index"].isin(atoms)].copy()
+    for item in mappings:
+        atom_numbers = [int(n) for n in item.get("atom_numbers", [])]
+        sub = df[df["atom_index"].isin(atom_numbers)].copy()
         if sub.empty:
             continue
 
@@ -485,14 +518,11 @@ def average_equivalent_atoms(df, groups):
         element_label = "/".join(elements) if elements else ""
 
         row = {
-            "group_label": group["label"],
-            "atom_indices": ",".join(map(str, atoms)),
-            "atom_labels": ",".join(group.get("atom_labels", [])),
-            "n_atoms": len(atoms),
+            "group_label": item["label"],
+            "atom_indices": ",".join(map(str, atom_numbers)),
+            "n_atoms": len(atom_numbers),
             "element": element_label,
-            "input_mode": group.get("input_mode", "atom_indices"),
         }
-
         for col in value_cols:
             row[col] = sub[col].mean()
 
@@ -501,47 +531,15 @@ def average_equivalent_atoms(df, groups):
     if results:
         return pd.DataFrame(results)
 
-    return pd.DataFrame(columns=["group_label", "atom_indices", "atom_labels", "n_atoms", "element", "input_mode"])
+    return pd.DataFrame(columns=["group_label", "atom_indices", "n_atoms", "element"])
 
 
 def dataframe_to_csv_bytes(df):
     return df.to_csv(index=False).encode("utf-8")
 
 
-def get_registered_atom_set(groups):
-    atom_set = set()
-    for g in groups:
-        atom_set.update(g["atoms"])
-    return atom_set
-
-
-def make_atom_option_labels(atom_df):
-    labels = []
-    for _, row in atom_df.iterrows():
-        atom_label = row.get("atom_label", "")
-        if pd.notna(atom_label) and str(atom_label).strip():
-            labels.append(f'{row["atom_index"]} ({row["element"]}) [{atom_label}]')
-        else:
-            labels.append(f'{row["atom_index"]} ({row["element"]})')
-    return labels
-
-
-def parse_atom_indices_from_labels(labels):
-    atoms = []
-    for label in labels:
-        m = re.match(r"^\s*(\d+)", str(label))
-        if m:
-            atoms.append(int(m.group(1)))
-    return sorted(set(atoms))
-
-
-def update_atom_table_with_labels(atom_df, atom_label_map):
-    out = atom_df.copy()
-    if out.empty:
-        out["atom_label"] = []
-        return out
-    out["atom_label"] = out["atom_index"].map(lambda x: atom_label_map.get(str(int(x)), ""))
-    return out
+def atom_index_from_user_number(user_number: int):
+    return user_number - 1
 
 
 def sanitize_filename_part(text):
@@ -574,6 +572,7 @@ def clean_common_prefix(prefix):
 
 def build_output_prefix_from_giao(giao_files, min_prefix_len=3, fallback="output"):
     stems = [sanitize_filename_part(f.name) for f in giao_files] if giao_files else []
+
     if not stems:
         return fallback
     if len(stems) == 1:
@@ -585,21 +584,11 @@ def build_output_prefix_from_giao(giao_files, min_prefix_len=3, fallback="output
     return fallback
 
 
-def get_label_to_atom_map(atom_label_map):
-    label_to_atom = {}
-    for k, v in atom_label_map.items():
-        label = str(v).strip()
-        if label:
-            label_to_atom[label] = int(k)
-    return label_to_atom
-
-
 def make_settings_json_bytes():
     payload = {
         "app": "Gaussian NMR Boltzmann Averaging App",
         "version": APP_VERSION,
-        "atom_label_map": st.session_state.get("atom_label_map", {}),
-        "equivalent_groups_ui": st.session_state.get("equivalent_groups_ui", []),
+        "atom_mappings": st.session_state.get("atom_mappings", []),
     }
     return json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
 
@@ -608,36 +597,26 @@ def load_settings_json(uploaded_file):
     text = uploaded_file.getvalue().decode("utf-8", errors="ignore")
     data = json.loads(text)
 
-    atom_label_map = data.get("atom_label_map", {})
-    equivalent_groups_ui = data.get("equivalent_groups_ui", [])
+    mappings = data.get("atom_mappings", [])
+    if not isinstance(mappings, list):
+        raise ValueError("atom_mappings is not a list.")
 
-    if not isinstance(atom_label_map, dict):
-        raise ValueError("atom_label_map is not a dictionary.")
-    if not isinstance(equivalent_groups_ui, list):
-        raise ValueError("equivalent_groups_ui is not a list.")
-
-    normalized_map = {}
-    for k, v in atom_label_map.items():
-        normalized_map[str(int(k))] = str(v)
-
-    normalized_groups = []
-    for g in equivalent_groups_ui:
-        if not isinstance(g, dict):
+    normalized = []
+    for item in mappings:
+        if not isinstance(item, dict):
             continue
-        atoms = sorted(set(int(x) for x in g.get("atoms", [])))
-        label = str(g.get("label", "")).strip()
-        atom_labels = [str(x) for x in g.get("atom_labels", []) if str(x).strip()]
-        input_mode = str(g.get("input_mode", "atom_indices"))
-        if label and atoms:
-            normalized_groups.append(
+        label = str(item.get("label", "")).strip()
+        atom_numbers = sorted(set(int(x) for x in item.get("atom_numbers", [])))
+        atom_indices = [atom_index_from_user_number(n) for n in atom_numbers]
+        if label and atom_numbers:
+            normalized.append(
                 {
                     "label": label,
-                    "atoms": atoms,
-                    "atom_labels": atom_labels,
-                    "input_mode": input_mode,
+                    "atom_numbers": atom_numbers,
+                    "atom_indices": atom_indices,
                 }
             )
-    return normalized_map, normalized_groups
+    return normalized
 
 
 with st.sidebar:
@@ -648,29 +627,29 @@ with st.sidebar:
     )
     st.session_state["ui_language"] = selected_language
 
-st.title(T("title"))
-st.caption(T("caption"))
-st.write(T("description"))
+st.title(t("title"))
+st.caption(t("caption"))
+st.write(t("description"))
 
-st.sidebar.header(T("settings"))
-with st.sidebar.expander(T("developer_info"), expanded=False):
-    st.sidebar.write(f'**{T("developer_name")}**: {DEVELOPER_INFO["name"]}')
-    if get_lang() == "ja":
-        st.sidebar.write(f'**{T("developer_affiliation")}**: {DEVELOPER_INFO["affiliation_ja"]}')
+st.sidebar.header(t("settings"))
+with st.sidebar.expander(t("developer_info"), expanded=False):
+    st.sidebar.write(f'**{t("developer_name")}**: {DEVELOPER_INFO["name"]}')
+    if current_language() == "ja":
+        st.sidebar.write(f'**{t("developer_affiliation")}**: {DEVELOPER_INFO["affiliation_ja"]}')
     else:
-        st.sidebar.write(f'**{T("developer_affiliation")}**: {DEVELOPER_INFO["affiliation_en"]}')
+        st.sidebar.write(f'**{t("developer_affiliation")}**: {DEVELOPER_INFO["affiliation_en"]}')
 
-temperature = st.sidebar.number_input(T("temperature"), value=298.15, step=1.0)
+temperature = st.sidebar.number_input(t("temperature"), value=298.15, step=1.0)
 
 energy_mode = st.sidebar.radio(
-    T("energy_mode"),
-    [T("energy_gibbs"), T("energy_scf")],
+    t("energy_mode"),
+    [t("energy_gibbs"), t("energy_scf")],
     index=0,
 )
 
 shift_mode = st.sidebar.radio(
-    T("shift_mode"),
-    [T("shift_manual"), T("shift_tms"), T("shift_linear")],
+    t("shift_mode"),
+    [t("shift_manual"), t("shift_tms"), t("shift_linear")],
     index=0,
 )
 
@@ -681,13 +660,13 @@ intercept_H = None
 slope_C = None
 intercept_C = None
 
-if shift_mode == T("shift_manual"):
-    ref_H = st.sidebar.number_input(T("ref_h"), value=31.5)
-    ref_C = st.sidebar.number_input(T("ref_c"), value=185.0)
+if shift_mode == t("shift_manual"):
+    ref_H = st.sidebar.number_input(t("ref_h"), value=31.5)
+    ref_C = st.sidebar.number_input(t("ref_c"), value=185.0)
 
-elif shift_mode == T("shift_tms"):
+elif shift_mode == t("shift_tms"):
     tms_file = st.sidebar.file_uploader(
-        T("upload_tms"),
+        t("upload_tms"),
         type=["log", "out"],
         accept_multiple_files=False,
         key="tms_log",
@@ -706,46 +685,46 @@ elif shift_mode == T("shift_tms"):
             st.session_state["tms_ref_H"] = parsed_ref_H
             st.session_state["tms_ref_C"] = parsed_ref_C
             st.session_state["tms_ref_filename"] = tms_file.name
-            st.sidebar.success(T("tms_success"))
-            st.sidebar.write(f'{T("tms_file")}: {tms_file.name}')
-            st.sidebar.write(f'{T("tms_h")}: {parsed_ref_H:.4f}')
-            st.sidebar.write(f'{T("tms_c")}: {parsed_ref_C:.4f}')
+            st.sidebar.success(t("tms_success"))
+            st.sidebar.write(f'{t("tms_file")}: {tms_file.name}')
+            st.sidebar.write(f'{t("tms_h")}: {parsed_ref_H:.4f}')
+            st.sidebar.write(f'{t("tms_c")}: {parsed_ref_C:.4f}')
 
     elif st.session_state["tms_ref_H"] is not None and st.session_state["tms_ref_C"] is not None:
-        st.sidebar.success(T("tms_prev"))
+        st.sidebar.success(t("tms_prev"))
         if st.session_state["tms_ref_filename"]:
-            st.sidebar.write(f'{T("tms_file")}: {st.session_state["tms_ref_filename"]}')
-        st.sidebar.write(f'{T("tms_h")}: {st.session_state["tms_ref_H"]:.4f}')
-        st.sidebar.write(f'{T("tms_c")}: {st.session_state["tms_ref_C"]:.4f}')
+            st.sidebar.write(f'{t("tms_file")}: {st.session_state["tms_ref_filename"]}')
+        st.sidebar.write(f'{t("tms_h")}: {st.session_state["tms_ref_H"]:.4f}')
+        st.sidebar.write(f'{t("tms_c")}: {st.session_state["tms_ref_C"]:.4f}')
     else:
-        st.sidebar.info(T("tms_prompt"))
+        st.sidebar.info(t("tms_prompt"))
 
     ref_H = st.session_state["tms_ref_H"]
     ref_C = st.session_state["tms_ref_C"]
 
-elif shift_mode == T("shift_linear"):
-    slope_H = st.sidebar.number_input(T("slope_h"), value=1.0)
-    intercept_H = st.sidebar.number_input(T("intercept_h"), value=31.5)
-    slope_C = st.sidebar.number_input(T("slope_c"), value=1.0)
-    intercept_C = st.sidebar.number_input(T("intercept_c"), value=185.0)
+elif shift_mode == t("shift_linear"):
+    slope_H = st.sidebar.number_input(t("slope_h"), value=1.0)
+    intercept_H = st.sidebar.number_input(t("intercept_h"), value=31.5)
+    slope_C = st.sidebar.number_input(t("slope_c"), value=1.0)
+    intercept_C = st.sidebar.number_input(t("intercept_c"), value=185.0)
 
 element_filter = st.sidebar.selectbox(
-    T("element_filter"),
-    [T("all"), T("h"), T("c"), T("other")],
+    t("element_filter"),
+    [t("all"), t("h"), t("c"), t("other")],
     index=0,
 )
 
-st.subheader(T("upload_header"))
+st.subheader(t("upload_header"))
 
 opt_files = st.file_uploader(
-    T("upload_opt"),
+    t("upload_opt"),
     type=["log", "out"],
     accept_multiple_files=True,
     key="opt_files",
 )
 
 giao_files = st.file_uploader(
-    T("upload_giao"),
+    t("upload_giao"),
     type=["log", "out"],
     accept_multiple_files=True,
     key="giao_files",
@@ -758,51 +737,47 @@ eq_df = None
 output_prefix = build_output_prefix_from_giao(giao_files)
 
 if giao_files:
-    st.caption(T("filename_prefix_info"))
+    st.caption(t("filename_prefix_info"))
 
-st.subheader(T("settings_io_header"))
+st.subheader(t("settings_io_header"))
+st.caption(t("save_project_desc"))
 col_set1, col_set2, col_set3 = st.columns([2, 2, 1])
 
 with col_set1:
     st.download_button(
-        label=T("download_settings"),
+        label=t("download_settings"),
         data=make_settings_json_bytes(),
-        file_name=f"{output_prefix}_nmr_labels_groups_settings.json",
+        file_name=f"{output_prefix}_nmr_mapping_settings.json",
         mime="application/json",
     )
 
 with col_set2:
     settings_file = st.file_uploader(
-        T("upload_settings"),
+        t("upload_settings"),
         type=["json"],
         accept_multiple_files=False,
         key="settings_json",
     )
     if settings_file is not None and not st.session_state["settings_loaded_once"]:
         try:
-            atom_label_map_loaded, groups_loaded = load_settings_json(settings_file)
-            st.session_state["atom_label_map"] = atom_label_map_loaded
-            st.session_state["equivalent_groups_ui"] = groups_loaded
+            mappings_loaded = load_settings_json(settings_file)
+            st.session_state["atom_mappings"] = mappings_loaded
             st.session_state["settings_loaded_once"] = True
-            st.success(T("settings_loaded"))
+            st.success(t("settings_loaded"))
             st.rerun()
         except Exception:
-            st.error(T("settings_load_error"))
+            st.error(t("settings_load_error"))
     if settings_file is None:
         st.session_state["settings_loaded_once"] = False
 
 with col_set3:
-    if st.button(T("clear_groups")):
-        st.session_state["equivalent_groups_ui"] = []
-        st.rerun()
-    if st.button(T("clear_labels")):
-        st.session_state["atom_label_map"] = {}
+    if st.button(t("clear_mappings")):
+        st.session_state["atom_mappings"] = []
+        st.session_state["mapping_selection"] = []
         st.rerun()
 
 if opt_files and giao_files:
     opt_records = []
-    xyz_candidates = []
-
     for f in opt_files:
         text = read_text(f)
         cid = extract_conf_id(f.name)
@@ -810,8 +785,6 @@ if opt_files and giao_files:
         scf = extract_last_scf_energy(text)
         normal = check_normal_termination(text)
         xyz_text = extract_last_xyz_from_gaussian(text)
-        if xyz_text:
-            xyz_candidates.append(xyz_text)
 
         opt_records.append(
             {
@@ -835,8 +808,6 @@ if opt_files and giao_files:
         normal = check_normal_termination(text)
         shielding_df = extract_isotropic_shieldings(text)
         xyz_text = extract_last_xyz_from_gaussian(text)
-        if xyz_text:
-            xyz_candidates.append(xyz_text)
 
         giao_records.append(
             {
@@ -847,12 +818,13 @@ if opt_files and giao_files:
                 "giao_xyz_text": xyz_text,
             }
         )
+
         shielding_map[cid] = shielding_df
 
     giao_df = pd.DataFrame(giao_records)
     pair_df = pd.merge(opt_df, giao_df, on="conf_id", how="inner")
 
-    if energy_mode == T("energy_gibbs"):
+    if energy_mode == t("energy_gibbs"):
         energy_col = "gibbs_hartree"
     else:
         energy_col = "scf_hartree"
@@ -866,13 +838,13 @@ if opt_files and giao_files:
     ].copy()
 
     if len(valid_df) == 0:
-        st.error(T("no_valid"))
+        st.error(t("no_valid"))
         st.stop()
 
     tms_ready = True
-    if shift_mode == T("shift_tms") and (ref_H is None or ref_C is None):
+    if shift_mode == t("shift_tms") and (ref_H is None or ref_C is None):
         tms_ready = False
-        st.warning(T("tms_not_ready"))
+        st.warning(t("tms_not_ready"))
 
     rel_kcal, weights = boltzmann_weights(valid_df[energy_col].values, temperature=temperature)
     valid_df["energy_used_hartree"] = valid_df[energy_col]
@@ -888,7 +860,6 @@ if opt_files and giao_files:
         .sort_values("atom_index")
         .reset_index(drop=True)
     )
-    atom_table_full = update_atom_table_with_labels(atom_table_full, st.session_state["atom_label_map"])
     st.session_state["latest_atom_table"] = atom_table_full.copy()
 
     valid_xyz = ""
@@ -899,38 +870,26 @@ if opt_files and giao_files:
         if isinstance(row.get("giao_xyz_text"), str) and row.get("giao_xyz_text").strip():
             valid_xyz = row["giao_xyz_text"]
             break
-    if not valid_xyz and xyz_candidates:
-        valid_xyz = xyz_candidates[0]
     st.session_state["latest_xyz"] = valid_xyz
 
     per_conf_df = per_conf_df_full.copy()
-    if element_filter == T("h"):
+    if element_filter == t("h"):
         per_conf_df = per_conf_df[per_conf_df["element"] == "H"].copy()
-    elif element_filter == T("c"):
+    elif element_filter == t("c"):
         per_conf_df = per_conf_df[per_conf_df["element"] == "C"].copy()
-    elif element_filter == T("other"):
+    elif element_filter == t("other"):
         per_conf_df = per_conf_df[~per_conf_df["element"].isin(["H", "C"])].copy()
-
-    per_conf_df = pd.merge(
-        per_conf_df,
-        atom_table_full[["atom_index", "element", "atom_label"]],
-        on=["atom_index", "element"],
-        how="left",
-    )
-    cols_front = ["atom_index", "element", "atom_label"]
-    other_cols = [c for c in per_conf_df.columns if c not in cols_front]
-    per_conf_df = per_conf_df[cols_front + other_cols]
 
     avg_df = add_boltzmann_average(per_conf_df, conf_ids, weights)
 
-    if shift_mode == T("shift_manual"):
+    if shift_mode == t("shift_manual"):
         result_df = shielding_to_shift(
             avg_df,
             mode="manual_reference",
             ref_H=ref_H,
             ref_C=ref_C,
         )
-    elif shift_mode == T("shift_tms"):
+    elif shift_mode == t("shift_tms"):
         if tms_ready:
             result_df = shielding_to_shift(
                 avg_df,
@@ -951,216 +910,214 @@ if opt_files and giao_files:
             intercept_C=intercept_C,
         )
 
-    with st.expander(T("matched_header"), expanded=False):
+    with st.expander(t("matched_header"), expanded=False):
         st.dataframe(pair_df, use_container_width=True)
 
-    with st.expander(T("weights_header"), expanded=False):
+    with st.expander(t("weights_header"), expanded=False):
         st.dataframe(valid_df, use_container_width=True)
 
-    with st.expander(T("shielding_header"), expanded=False):
+    with st.expander(t("shielding_header"), expanded=False):
         st.dataframe(per_conf_df, use_container_width=True)
 
-    with st.expander(T("avg_header"), expanded=False):
-        st.caption(T("summary_columns_note"))
+    with st.expander(t("avg_header"), expanded=False):
+        st.caption(t("summary_columns_note"))
         st.dataframe(result_df, use_container_width=True)
 
-st.subheader(T("eq_header"))
+st.subheader(t("mapping_header"))
+st.write(t("mapping_desc"))
 
 atom_df_ui = st.session_state["latest_atom_table"].copy()
 
 if atom_df_ui.empty:
-    st.info(T("atom_table_empty"))
+    st.info(t("coord_not_found"))
 else:
-    st.markdown(f"**{T('atom_label_header')}**")
-    st.caption(T("atom_label_help"))
+    current_selection = st.session_state.get("mapping_selection", [])
 
-    label_editor_df = atom_df_ui[["atom_index", "element", "atom_label"]].copy()
-    label_editor_df = label_editor_df.rename(columns={"atom_label": T("atom_label_column")})
+    left, right = st.columns([1.55, 1.0], gap="large")
 
-    edited_labels_df = st.data_editor(
-        label_editor_df,
-        use_container_width=True,
-        num_rows="fixed",
-        disabled=["atom_index", "element"],
-        key="atom_label_editor_widget",
-    )
-
-    if st.button(T("apply_labels"), key="apply_labels_button"):
-        new_map = {}
-        label_col = T("atom_label_column")
-        for _, row in edited_labels_df.iterrows():
-            label = str(row[label_col]).strip() if pd.notna(row[label_col]) else ""
-            if label:
-                new_map[str(int(row["atom_index"]))] = label
-        st.session_state["atom_label_map"] = new_map
-        st.success(T("labels_updated"))
-        st.rerun()
-
-    ui_filter = st.selectbox(
-        T("filter_atoms_group"),
-        [T("all"), T("h"), T("c"), T("other")],
-        index=0,
-        key="eq_ui_filter",
-    )
-
-    atom_df_filtered = atom_df_ui.copy()
-    if ui_filter == T("h"):
-        atom_df_filtered = atom_df_filtered[atom_df_filtered["element"] == "H"].copy()
-    elif ui_filter == T("c"):
-        atom_df_filtered = atom_df_filtered[atom_df_filtered["element"] == "C"].copy()
-    elif ui_filter == T("other"):
-        atom_df_filtered = atom_df_filtered[~atom_df_filtered["element"].isin(["H", "C"])].copy()
-
-    registered_atoms = get_registered_atom_set(st.session_state["equivalent_groups_ui"])
-    atom_df_filtered["already_registered"] = atom_df_filtered["atom_index"].isin(registered_atoms)
-
-    st.write(T("available_atoms"))
-    st.dataframe(atom_df_filtered, use_container_width=True)
-
-    group_label = st.text_input(T("group_label"), value="", key="eq_group_label")
-
-    group_input_mode = st.radio(
-        T("group_input_mode"),
-        [T("group_by_structure"), T("group_by_indices"), T("group_by_labels")],
-        index=0,
-        key="eq_group_input_mode",
-    )
-
-    selected_atoms = []
-    selected_atom_labels = []
-
-    if group_input_mode == T("group_by_structure"):
-        st.markdown(f"**{T('structure_picker_title')}**")
-        if st.session_state["latest_xyz"]:
-            st.caption(T("structure_picker_help"))
-            picker_default = st.session_state.get("picker_selected_atoms", [])
-            picker_value = ATOM_PICKER(
-                xyz=st.session_state["latest_xyz"],
-                selected_atoms=picker_default,
-                language=get_lang(),
-                height=520,
-                key="atom_picker_component_instance",
-                default=picker_default,
-            )
-            if picker_value is None:
-                picker_value = picker_default
-            st.session_state["picker_selected_atoms"] = sorted(set(int(x) for x in picker_value))
-            selected_atoms = st.session_state["picker_selected_atoms"]
-
-            reverse_map = {
-                int(k): v.strip()
-                for k, v in st.session_state["atom_label_map"].items()
-                if str(v).strip()
-            }
-            selected_atom_labels = [reverse_map[a] for a in selected_atoms if a in reverse_map]
-
-            st.write(f"**{T('selected_atoms_preview')}**: " + (", ".join(map(str, selected_atoms)) if selected_atoms else "-"))
-            st.write(f"**{T('selected_labels_preview')}**: " + (", ".join(selected_atom_labels) if selected_atom_labels else "-"))
-        else:
-            st.info(T("coord_not_found"))
-
-    elif group_input_mode == T("group_by_indices"):
-        atom_option_labels = make_atom_option_labels(atom_df_filtered[["atom_index", "element", "atom_label"]])
-        selected_atom_labels_raw = st.multiselect(
-            T("select_atom_indices"),
-            options=atom_option_labels,
-            default=[],
-            key="eq_selected_atoms_indices",
+    with left:
+        st.markdown(t("click_atoms"))
+        picked_atoms = atom_picker(
+            atom_df_ui["element"].tolist(),
+            st.session_state["latest_xyz"],
+            selected_atoms=current_selection,
+            language=current_language(),
+            key="nmr_atom_picker",
         )
-        selected_atoms = parse_atom_indices_from_labels(selected_atom_labels_raw)
+        st.session_state["mapping_selection"] = picked_atoms
+        current_selection = picked_atoms
+        st.caption(t("viewer_caption"))
 
-        reverse_map = {
-            int(k): v.strip()
-            for k, v in st.session_state["atom_label_map"].items()
-            if str(v).strip()
-        }
-        selected_atom_labels = [reverse_map[a] for a in selected_atoms if a in reverse_map]
+    with right:
+        st.markdown(t("new_mapping"))
 
+        if current_selection:
+            selected_details = [
+                f'{atom_df_ui.loc[atom_df_ui["atom_index"] == number, "element"].iloc[0]} {number}'
+                for number in current_selection
+                if number in atom_df_ui["atom_index"].tolist()
+            ]
+            st.success(t("selected", items=", ".join(selected_details)))
+        else:
+            st.info(t("none_selected"))
+
+        label_mode = st.radio(
+            t("label_entry"),
+            [t("build_label"), t("free_text")],
+            horizontal=True,
+            key="nmr_label_mode",
+        )
+
+        if label_mode == t("build_label"):
+            label_col1, label_col2 = st.columns([1.2, 1.0])
+            position = label_col1.text_input(
+                t("position_number"),
+                value="",
+                placeholder=t("position_placeholder"),
+                key="nmr_position",
+            ).strip()
+            prime = label_col2.selectbox(
+                t("prime"),
+                ["", "′", "″", "‴"],
+                key="nmr_prime",
+            )
+            proposed_label = f"H-{position}{prime}" if position else ""
+            if proposed_label:
+                st.markdown(t("display_label", label=proposed_label))
+        else:
+            proposed_label = st.text_input(
+                t("label"),
+                value="",
+                placeholder=t("label_placeholder"),
+                key="nmr_custom_label",
+            ).strip()
+
+        button_col1, button_col2 = st.columns(2)
+        save_mapping = button_col1.button(
+            t("save_mapping"),
+            type="primary",
+            use_container_width=True,
+            key="nmr_save_mapping",
+        )
+        clear_selection = button_col2.button(
+            t("clear_selection"),
+            use_container_width=True,
+            key="nmr_clear_selection",
+        )
+
+        if clear_selection:
+            st.session_state["mapping_selection"] = []
+            st.rerun()
+
+        if save_mapping:
+            if not proposed_label:
+                st.error(t("enter_label"))
+            elif not current_selection:
+                st.error(t("select_atom"))
+            else:
+                non_h = [
+                    n for n in current_selection
+                    if atom_df_ui.loc[atom_df_ui["atom_index"] == n, "element"].iloc[0] != "H"
+                ]
+                if non_h:
+                    st.error(t("non_hydrogen", atoms=", ".join(map(str, non_h))))
+                else:
+                    atom_indices = [atom_index_from_user_number(n) for n in current_selection]
+                    existing = next(
+                        (item for item in st.session_state["atom_mappings"] if item["label"] == proposed_label),
+                        None,
+                    )
+                    if existing is None:
+                        st.session_state["atom_mappings"].append(
+                            {
+                                "label": proposed_label,
+                                "atom_numbers": list(current_selection),
+                                "atom_indices": atom_indices,
+                            }
+                        )
+                        st.success(t("added", label=proposed_label))
+                    else:
+                        existing["atom_numbers"] = list(current_selection)
+                        existing["atom_indices"] = atom_indices
+                        st.success(t("updated", label=proposed_label))
+                    st.session_state["mapping_selection"] = []
+                    st.rerun()
+
+        with st.expander(t("manual_fallback")):
+            st.caption(t("manual_desc"))
+            manual_raw = st.text_input(
+                t("manual_numbers"),
+                value=",".join(map(str, current_selection)),
+                key="nmr_manual_selection",
+            )
+            if st.button(t("apply_manual"), key="nmr_apply_manual"):
+                try:
+                    manual_numbers = sorted({
+                        int(x.strip())
+                        for x in manual_raw.split(",")
+                        if x.strip()
+                    })
+                    invalid = [n for n in manual_numbers if n < 1 or n > len(atom_df_ui)]
+                    if invalid:
+                        st.error(t("out_of_range", atoms=", ".join(map(str, invalid))))
+                    else:
+                        st.session_state["mapping_selection"] = manual_numbers
+                        st.rerun()
+                except ValueError:
+                    st.error(t("integer_error"))
+
+    st.markdown(t("registered_mappings"))
+    if not st.session_state["atom_mappings"]:
+        st.info(t("no_mappings"))
     else:
-        label_to_atom = get_label_to_atom_map(st.session_state["atom_label_map"])
-        available_label_to_atom = {
-            label: atom
-            for label, atom in label_to_atom.items()
-            if atom in atom_df_filtered["atom_index"].tolist()
-        }
-        selected_atom_labels = st.multiselect(
-            T("select_atom_labels"),
-            options=sorted(available_label_to_atom.keys()),
-            default=[],
-            key="eq_selected_atoms_labels",
-        )
-        selected_atoms = sorted(set(available_label_to_atom[label] for label in selected_atom_labels))
+        for idx, item in enumerate(list(st.session_state["atom_mappings"])):
+            with st.container(border=True):
+                info_col, select_col, delete_col = st.columns([4.5, 1.5, 1.0])
+                atom_numbers = [int(n) for n in item.get("atom_numbers", [])]
+                atom_text = ", ".join(str(n) for n in atom_numbers) if atom_numbers else t("not_assigned")
+                info_col.markdown(f'**{item["label"]}**  \n{t("atoms_label")}: {atom_text}')
+                if select_col.button(
+                    t("show_edit"),
+                    key=f"show_mapping_{idx}",
+                    use_container_width=True,
+                ):
+                    st.session_state["mapping_selection"] = list(item["atom_numbers"])
+                    st.rerun()
+                if delete_col.button(
+                    t("delete"),
+                    key=f"delete_mapping_{idx}",
+                    use_container_width=True,
+                ):
+                    st.session_state["atom_mappings"].pop(idx)
+                    st.rerun()
 
-    if selected_atoms:
-        overlapping_atoms = sorted(set(selected_atoms) & registered_atoms)
-        if overlapping_atoms:
-            st.warning(T("already_registered") + ": " + ", ".join(map(str, overlapping_atoms)))
-
-    if st.button(T("add_group"), key="add_eq_group"):
-        clean_label = group_label.strip()
-
-        if not clean_label:
-            st.warning(T("enter_group_label"))
-        elif not selected_atoms:
-            st.warning(T("select_one_atom"))
-        else:
-            st.session_state["equivalent_groups_ui"].append(
-                {
-                    "label": clean_label,
-                    "atoms": selected_atoms,
-                    "atom_labels": selected_atom_labels,
-                    "input_mode": (
-                        "structure_picker" if group_input_mode == T("group_by_structure")
-                        else "atom_labels" if group_input_mode == T("group_by_labels")
-                        else "atom_indices"
-                    ),
-                }
-            )
-            st.rerun()
-
-if st.session_state["equivalent_groups_ui"]:
-    st.write(T("registered_groups"))
-
-    registered_rows = []
-    for g in st.session_state["equivalent_groups_ui"]:
-        registered_rows.append(
+    with st.expander(t("mapping_status"), expanded=False):
+        status_df = pd.DataFrame([
             {
-                "label": g["label"],
-                "atom_indices": ", ".join(map(str, g["atoms"])),
-                "atom_labels": ", ".join(g.get("atom_labels", [])),
-                "n_atoms": len(g["atoms"]),
-                "input_mode": g.get("input_mode", ""),
+                t("mapping_registered"): len(st.session_state["atom_mappings"]),
+                t("mapping_labels"): ", ".join(item["label"] for item in st.session_state["atom_mappings"]),
             }
-        )
-    st.dataframe(pd.DataFrame(registered_rows), use_container_width=True)
-
-    for i, g in enumerate(st.session_state["equivalent_groups_ui"]):
-        col1, col2, col3, col4 = st.columns([2, 4, 3, 1])
-        col1.write(f'**{g["label"]}**')
-        col2.write(", ".join(map(str, g["atoms"])))
-        col3.write(", ".join(g.get("atom_labels", [])))
-        if col4.button(T("delete"), key=f"delete_group_{i}"):
-            st.session_state["equivalent_groups_ui"].pop(i)
-            st.rerun()
+        ])
+        st.dataframe(status_df, use_container_width=True, hide_index=True)
 
 if result_df is not None:
-    if st.session_state["equivalent_groups_ui"]:
-        eq_df = average_equivalent_atoms(result_df, st.session_state["equivalent_groups_ui"])
-        st.subheader(T("eq_avg_header"))
+    if st.session_state["atom_mappings"]:
+        eq_df = average_equivalent_atoms(result_df, st.session_state["atom_mappings"])
+        st.subheader(t("eq_avg_header"))
         st.dataframe(eq_df, use_container_width=True)
 
-    st.subheader(T("download_header"))
+    st.subheader(t("download_header"))
 
     if per_conf_df is not None:
         st.download_button(
-            label=T("download_per_conf"),
+            label=t("download_per_conf"),
             data=dataframe_to_csv_bytes(per_conf_df),
             file_name=f"{output_prefix}_per_conformer_isotropic_shieldings.csv",
             mime="text/csv",
         )
 
     st.download_button(
-        label=T("download_avg"),
+        label=t("download_avg"),
         data=dataframe_to_csv_bytes(result_df),
         file_name=f"{output_prefix}_boltzmann_averaged_nmr.csv",
         mime="text/csv",
@@ -1168,7 +1125,7 @@ if result_df is not None:
 
     if valid_df is not None:
         st.download_button(
-            label=T("download_weights"),
+            label=t("download_weights"),
             data=dataframe_to_csv_bytes(valid_df),
             file_name=f"{output_prefix}_boltzmann_weights.csv",
             mime="text/csv",
@@ -1176,7 +1133,7 @@ if result_df is not None:
 
     if eq_df is not None:
         st.download_button(
-            label=T("download_eq"),
+            label=t("download_eq"),
             data=dataframe_to_csv_bytes(eq_df),
             file_name=f"{output_prefix}_equivalent_atom_averaged_nmr.csv",
             mime="text/csv",
