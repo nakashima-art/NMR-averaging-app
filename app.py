@@ -11,7 +11,7 @@ st.set_page_config(page_title="Gaussian NMR Boltzmann Averaging App", layout="wi
 HARTREE_TO_KCAL = 627.509474
 R_KCAL = 0.0019872041  # kcal mol^-1 K^-1
 
-APP_VERSION = "2.2"
+APP_VERSION = "2.3"
 
 DEVELOPER_INFO = {
     "name": "Ken-ichi Nakashima",
@@ -83,10 +83,10 @@ UI_TEXT = {
         "shielding_header": "4. Isotropic shielding table for each conformer",
         "avg_header": "5. Per-atom Boltzmann-averaged shielding / shift table",
         "mapping_header": "6. Atom mapping",
-        "mapping_desc": "Click one or more atoms in the 3D structure, assign a proton label, and save the mapping. Multiple selected atoms are treated as an interchangeable group.",
+        "mapping_desc": "Click one or more atoms in the 3D structure, assign a label, and save the mapping. Multiple selected atoms are treated as an interchangeable group.",
         "click_atoms": "#### Click atoms in the 3D structure",
-        "viewer_caption": "Hydrogen atom numbers are shown by default. Use the checkboxes above the viewer to display all atom numbers or to show hydrogens only.",
-        "new_mapping": "#### New proton mapping",
+        "viewer_caption": "Use the checkboxes above the viewer to hide hydrogens or switch atom-number display between all atoms, hydrogens only, and carbons only.",
+        "new_mapping": "#### New mapping",
         "selected": "Selected: {items}",
         "none_selected": "No atom is selected yet.",
         "label_entry": "Label entry",
@@ -97,12 +97,11 @@ UI_TEXT = {
         "prime": "Prime",
         "display_label": "Display label: **{label}**",
         "label": "Label",
-        "label_placeholder": "e.g. H-2′ / H-6′",
+        "label_placeholder": "e.g. H-2′ / H-6′ or C-4",
         "save_mapping": "Save mapping",
         "clear_selection": "Clear selection",
-        "enter_label": "Enter a proton label.",
+        "enter_label": "Enter a label.",
         "select_atom": "Select at least one atom in the 3D structure.",
-        "non_hydrogen": "The following selected atoms are not hydrogen atoms: {atoms}",
         "added": "Added {label}.",
         "updated": "Updated {label}.",
         "manual_fallback": "Manual selection fallback",
@@ -135,7 +134,7 @@ UI_TEXT = {
         "filename_prefix_info": "Output filenames use the common prefix of uploaded GIAO files.",
         "summary_columns_note": "The Boltzmann-averaged table includes weight_<conf_id> columns.",
         "coord_not_found": "No coordinate block could be extracted from valid files, so the structure picker is unavailable.",
-        "save_project_desc": "The JSON file stores only proton labels / equivalent groups, not the Gaussian logs or calculation results.",
+        "save_project_desc": "The JSON file stores only labels / equivalent groups, not the Gaussian logs or calculation results.",
     },
     "ja": {
         "title": "Gaussian NMR Boltzmann Averaging App",
@@ -185,10 +184,10 @@ UI_TEXT = {
         "shielding_header": "4. 各配座の isotropic shielding テーブル",
         "avg_header": "5. 原子ごとの Boltzmann 平均 shielding / shift テーブル",
         "mapping_header": "6. Atom mapping",
-        "mapping_desc": "3D 構造上で1つ以上の原子を選択し、プロトンラベルを付けて保存します。複数選択した原子は交換可能なグループとして扱います。",
+        "mapping_desc": "3D 構造上で1つ以上の原子を選択し、ラベルを付けて保存します。複数選択した原子は交換可能なグループとして扱います。",
         "click_atoms": "#### 3D 構造上で原子をクリック",
-        "viewer_caption": "初期状態では水素原子番号が表示されます。上部のチェックボックスで全原子番号表示や水素のみ表示に切り替えられます。",
-        "new_mapping": "#### 新しいプロトンマッピング",
+        "viewer_caption": "ビューア上部のチェックボックスで、水素非表示や原子番号表示（全原子・水素のみ・炭素のみ）を切り替えられます。",
+        "new_mapping": "#### 新しいマッピング",
         "selected": "選択中: {items}",
         "none_selected": "まだ原子が選択されていません。",
         "label_entry": "ラベル入力",
@@ -199,12 +198,11 @@ UI_TEXT = {
         "prime": "Prime",
         "display_label": "表示ラベル: **{label}**",
         "label": "ラベル",
-        "label_placeholder": "例: H-2′ / H-6′",
+        "label_placeholder": "例: H-2′ / H-6′ または C-4",
         "save_mapping": "マッピングを保存",
         "clear_selection": "選択をクリア",
-        "enter_label": "プロトンラベルを入力してください。",
+        "enter_label": "ラベルを入力してください。",
         "select_atom": "少なくとも1つ原子を選択してください。",
-        "non_hydrogen": "以下の選択原子は水素ではありません: {atoms}",
         "added": "{label} を追加しました。",
         "updated": "{label} を更新しました。",
         "manual_fallback": "手動選択フォールバック",
@@ -237,7 +235,7 @@ UI_TEXT = {
         "filename_prefix_info": "出力ファイル名にはアップロードした GIAO ファイルの共通接頭辞を使用します。",
         "summary_columns_note": "Boltzmann 平均テーブルには weight_<conf_id> 列を含みます。",
         "coord_not_found": "有効ファイルから座標ブロックを抽出できなかったため、構造ピッカーは使用できません。",
-        "save_project_desc": "JSON ファイルにはプロトンラベル / equivalent group の情報のみを保存し、Gaussian ログや計算結果は保存しません。",
+        "save_project_desc": "JSON ファイルにはラベル / equivalent group の情報のみを保存し、Gaussian ログや計算結果は保存しません。",
     },
 }
 
@@ -981,33 +979,26 @@ else:
         elif not current_selection:
             st.error(t("select_atom"))
         else:
-            non_h = [
-                n for n in current_selection
-                if atom_df_ui.loc[atom_df_ui["atom_index"] == n, "element"].iloc[0] != "H"
-            ]
-            if non_h:
-                st.error(t("non_hydrogen", atoms=", ".join(map(str, non_h))))
-            else:
-                atom_indices = [atom_index_from_user_number(n) for n in current_selection]
-                existing = next(
-                    (item for item in st.session_state["atom_mappings"] if item["label"] == proposed_label),
-                    None,
+            atom_indices = [atom_index_from_user_number(n) for n in current_selection]
+            existing = next(
+                (item for item in st.session_state["atom_mappings"] if item["label"] == proposed_label),
+                None,
+            )
+            if existing is None:
+                st.session_state["atom_mappings"].append(
+                    {
+                        "label": proposed_label,
+                        "atom_numbers": list(current_selection),
+                        "atom_indices": atom_indices,
+                    }
                 )
-                if existing is None:
-                    st.session_state["atom_mappings"].append(
-                        {
-                            "label": proposed_label,
-                            "atom_numbers": list(current_selection),
-                            "atom_indices": atom_indices,
-                        }
-                    )
-                    st.success(t("added", label=proposed_label))
-                else:
-                    existing["atom_numbers"] = list(current_selection)
-                    existing["atom_indices"] = atom_indices
-                    st.success(t("updated", label=proposed_label))
-                st.session_state["mapping_selection"] = []
-                st.rerun()
+                st.success(t("added", label=proposed_label))
+            else:
+                existing["atom_numbers"] = list(current_selection)
+                existing["atom_indices"] = atom_indices
+                st.success(t("updated", label=proposed_label))
+            st.session_state["mapping_selection"] = []
+            st.rerun()
 
     with st.expander(t("manual_fallback")):
         st.caption(t("manual_desc"))
